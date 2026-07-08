@@ -9,7 +9,7 @@ export type PuzzleType =
   | 'recall'
   | 'final'
 
-export type EndingId = 'verified' | 'probablyHuman' | 'ghost' | 'rejected' | 'flagged'
+export type EndingId = 'verified' | 'probablyHuman' | 'ghost' | 'rejected' | 'flagged' | 'tooPerfect'
 
 export type SuspicionEvent =
   | 'retry'

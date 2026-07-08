@@ -146,6 +146,17 @@ describe('reducer', () => {
     expect(s.ending).toBe('probablyHuman')
   })
 
+  it('FINAL_CHOICE human can unlock tooPerfect after a flawless full run', () => {
+    const flawlessHistory = Array.from({ length: 9 }, (_, i) => ({ round: i + 1, passed: true }))
+    const at10 = reducer(playing, {
+      type: 'DEBUG_SET',
+      patch: { round: 10, suspicion: 0, strikes: 0, score: 1700, history: flawlessHistory },
+    })
+    const s = reducer(at10, { type: 'FINAL_CHOICE', choice: 'human' })
+    expect(s.phase).toBe('ending')
+    expect(s.ending).toBe('tooPerfect')
+  })
+
   it('RESTART resets the run but keeps sound pref', () => {
     const s = run(
       initialState,

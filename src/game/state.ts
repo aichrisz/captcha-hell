@@ -22,6 +22,8 @@ function endRun(state: GameState): GameState {
     suspicion: state.suspicion,
     strikes: state.strikes,
     finalChoice: state.finalChoice,
+    score: state.score,
+    roundsCleared: state.history.length,
   })
   return { ...state, phase: 'ending', ending }
 }

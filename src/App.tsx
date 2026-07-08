@@ -2,6 +2,10 @@ import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { reducer, initialState } from './game/state'
 import { getRound, type FinalData } from './game/rounds'
 import { ENDING_COPY } from './game/endings'
+import { humanityLabel, humanityScore } from './game/humanity'
+import { filesForStage, popupsForRound, webcamLine, type PopupEvent } from './game/intrusions'
+import { pickFlavor } from './game/flavor'
+import { buildShareText } from './game/share'
 import type { CheckboxData } from './game/puzzles/checkbox'
 import { initCheckbox, nextCheckboxState } from './game/puzzles/checkbox'
 import type { GridData } from './game/puzzles/grid'
@@ -16,6 +20,21 @@ import type { EndingId, GameState, RoundResult } from './game/types'
 
 function formatTime(sec: number) {
   return `${Math.max(0, Math.ceil(sec))}s`
+}
+
+interface TrailDot {
+  id: number
+  x: number
+  y: number
+}
+
+function humanityOf(state: GameState) {
+  return humanityScore({
+    score: state.score,
+    strikes: state.strikes,
+    suspicion: state.suspicion,
+    roundsCleared: state.history.length,
+  })
 }
 
 function readBest() {
@@ -72,6 +91,12 @@ export default function App() {
   const beep = useBeep(state.soundOn)
   const debug = useMemo(() => new URLSearchParams(location.search).has('debug'), [])
   const round = state.phase === 'play' ? getRound(state.round) : null
+  const humanity = humanityOf(state)
+  const [popups, setPopups] = useState<PopupEvent[]>([])
+  const seenPopups = useRef<Set<string>>(new Set())
+  const [tick, setTick] = useState(0)
+  const [trail, setTrail] = useState<TrailDot[]>([])
+  const trailSeq = useRef(0)
 
   useEffect(() => {
     if (!round) return
@@ -105,6 +130,52 @@ export default function App() {
     setMessage('Time expired. The widget noticed.')
   }, [state.phase, state.attempt, state.strikes, round?.id, round?.timerSec, timeLeft, handledExpiry, beep])
 
+  // Fake popup theater: schedule this round's popups once per run. Copy only,
+  // rendered inside the app, no real windows or permissions.
+  useEffect(() => {
+    if (state.phase !== 'play') {
+      setPopups([])
+      seenPopups.current = new Set()
+      return
+    }
+    if (!round) return
+    const due = popupsForRound(round.id).filter((p) => !seenPopups.current.has(p.id))
+    const timers = due.map((p) => window.setTimeout(() => {
+      seenPopups.current.add(p.id)
+      setPopups((prev) => (prev.some((x) => x.id === p.id) ? prev : [...prev, p]))
+    }, p.delayMs))
+    return () => timers.forEach((t) => window.clearTimeout(t))
+  }, [state.phase, round?.id])
+
+  // Rotating flavor line in the notes panel.
+  useEffect(() => {
+    if (state.phase !== 'play') return
+    const id = window.setInterval(() => setTick((t) => t + 1), 5000)
+    return () => window.clearInterval(id)
+  }, [state.phase])
+
+  // Cursor lag trail: purely visual ghost dots, only with motion at full.
+  useEffect(() => {
+    const osReduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+    if (reduceMotion || osReduced || state.phase !== 'play') return
+    let last = 0
+    const onMove = (e: PointerEvent) => {
+      const now = performance.now()
+      if (now - last < 40) return
+      last = now
+      const dot = { id: ++trailSeq.current, x: e.clientX, y: e.clientY }
+      setTrail((prev) => [...prev.slice(-11), dot])
+      window.setTimeout(() => setTrail((prev) => prev.filter((d) => d.id !== dot.id)), 700)
+    }
+    window.addEventListener('pointermove', onMove)
+    return () => window.removeEventListener('pointermove', onMove)
+  }, [reduceMotion, state.phase])
+
+  const dismissPopup = (id: string) => {
+    setPopups((prev) => prev.filter((p) => p.id !== id))
+    beep('tick')
+  }
+
   const submit = (result: RoundResult) => {
     dispatch({ type: 'SUBMIT_ROUND', result })
     beep(result.passed ? 'ok' : 'bad')
@@ -117,13 +188,13 @@ export default function App() {
 
   if (state.phase === 'ending') {
     const ending = state.ending ?? 'rejected'
-    return <Ending state={state} best={best} dispatch={dispatch} ending={ending} />
+    return <Ending state={state} best={best} dispatch={dispatch} ending={ending} reduceMotion={reduceMotion} />
   }
 
   return (
-    <main className={`app stage-${round?.stage ?? 1} ${reduceMotion ? 'reduce-motion' : ''}`}>
+    <main className={`app crt stage-${round?.stage ?? 1} ${reduceMotion ? 'reduce-motion' : ''}`}>
       <section className="shell">
-        <Header state={state} timeLeft={timeLeft} roundTimer={round?.timerSec ?? 0} dispatch={dispatch} />
+        <Header state={state} humanity={humanity} timeLeft={timeLeft} roundTimer={round?.timerSec ?? 0} dispatch={dispatch} />
         <section className="widget" aria-label="Captcha challenge">
           <p className="micro">SECURE HUMAN VERIFICATION</p>
           <h1>Captcha Hell</h1>
@@ -133,9 +204,37 @@ export default function App() {
         <aside className="terms">
           <h2>Verification notes</h2>
           <p>Do not refresh. Do not overthink. Do not resemble an automated process.</p>
+          <p className="flavor" aria-live="polite">{round ? pickFlavor(round.id, tick) : ''}</p>
           <p>Current mood: {state.suspicion > 65 ? 'accusatory' : state.round > 6 ? 'philosophical' : 'corporate'}</p>
+          {round && (
+            <div className="readout">
+              <p className="readout-title">CAM ANALYSIS</p>
+              <p className="webcam-line">{webcamLine(round.id, state.suspicion)}</p>
+              <p className="readout-title">CONSULTED FILES</p>
+              <ul className="files">
+                {filesForStage(round.stage).map((f) => <li key={f}>{f}</li>)}
+              </ul>
+              <p className="readout-note">Theater only. No camera, no files, no system access.</p>
+            </div>
+          )}
         </aside>
       </section>
+      {popups.length > 0 && (
+        <div className="popup-layer">
+          {popups.map((p, i) => (
+            <div key={p.id} className="popup" role="alert" aria-label={p.title} style={{ transform: `translate(${i * 12}px, ${i * 12}px)` }}>
+              <div className="popup-title"><span>{p.title}</span><span aria-hidden="true">x</span></div>
+              <p className="popup-body">{p.body}</p>
+              <button onClick={() => dismissPopup(p.id)}>{p.dismiss}</button>
+            </div>
+          ))}
+        </div>
+      )}
+      {trail.length > 0 && (
+        <div className="trail-layer" aria-hidden="true">
+          {trail.map((d) => <span key={d.id} className="trail-dot" style={{ left: d.x, top: d.y }} />)}
+        </div>
+      )}
       {debug && <Debug dispatch={dispatch} state={state} />}
     </main>
   )
@@ -159,11 +258,12 @@ function StartScreen({ best, state, dispatch, reduceMotion, setReduceMotion }: {
   )
 }
 
-function Header({ state, timeLeft, roundTimer, dispatch }: { state: GameState; timeLeft: number; roundTimer: number; dispatch: React.Dispatch<any> }) {
+function Header({ state, humanity, timeLeft, roundTimer, dispatch }: { state: GameState; humanity: number; timeLeft: number; roundTimer: number; dispatch: React.Dispatch<any> }) {
   return (
     <header className="hud">
       <Meter label="Score" value={state.score} max={500} plain />
       <Meter label="Suspicion" value={state.suspicion} max={100} />
+      <Meter label="Humanity" value={humanity} max={100} blue />
       <Meter label="Strikes" value={state.strikes} max={3} danger />
       <div className="stat"><span>Round</span><strong>{state.round}/10</strong></div>
       <div className="stat"><span>Timer</span><strong>{roundTimer ? formatTime(timeLeft) : 'final'}</strong></div>
@@ -172,9 +272,9 @@ function Header({ state, timeLeft, roundTimer, dispatch }: { state: GameState; t
   )
 }
 
-function Meter({ label, value, max, danger, plain }: { label: string; value: number; max: number; danger?: boolean; plain?: boolean }) {
+function Meter({ label, value, max, danger, plain, blue }: { label: string; value: number; max: number; danger?: boolean; plain?: boolean; blue?: boolean }) {
   const pct = Math.max(0, Math.min(100, (value / max) * 100))
-  return <div className={`stat ${danger ? 'danger' : ''}`}><span>{label}</span><strong>{plain ? value : Math.round(value)}</strong><i style={{ width: `${pct}%` }} /></div>
+  return <div className={`stat ${danger ? 'danger' : ''} ${blue ? 'human' : ''}`}><span>{label}</span><strong>{plain ? value : Math.round(value)}</strong><i style={{ width: `${pct}%` }} /></div>
 }
 
 function Puzzle({ round, state, timeLeft, submit, dispatch, reduceMotion }: { round: ReturnType<typeof getRound>; state: GameState; timeLeft: number; submit: (r: RoundResult) => void; dispatch: React.Dispatch<any>; reduceMotion: boolean }) {
@@ -227,8 +327,51 @@ function FinalPuzzle({ data, dispatch }: { data: FinalData; dispatch: React.Disp
   return <div><h2>{data.prompt}</h2><button className="checkbox final-box" style={{ transform: `translate(${box.offsetX}px, ${box.offsetY}px)` }} onClick={() => setBox((s) => nextCheckboxState(s, data.checkbox, false).state)}><span>{box.frozen ? '?' : ''}</span>{data.checkbox.prompt}</button>{frozen && <div className="choices">{data.word.options.map((opt, i) => <button key={opt} onClick={() => dispatch({ type: 'FINAL_CHOICE', choice: data.word.branch?.[i] ?? 'trying' })}>{opt}</button>)}</div>}</div>
 }
 
-function Ending({ state, best, dispatch, ending }: { state: GameState; best: ReturnType<typeof readBest>; dispatch: React.Dispatch<any>; ending: EndingId }) {
-  return <main className="start ending"><section className="start-card"><p className="micro">VERIFICATION COMPLETE</p><h1>{ENDING_COPY[ending].title}</h1><p className="lede">{ENDING_COPY[ending].lines.join(' ')}</p><dl className="result"><div><dt>Score</dt><dd>{state.score}</dd></div><div><dt>Strikes</dt><dd>{state.strikes}/3</dd></div><div><dt>Suspicion</dt><dd>{state.suspicion}</dd></div><div><dt>Best</dt><dd>{best?.score ?? state.score}</dd></div></dl><button className="primary" onClick={() => dispatch({ type: 'START_RUN' })}>Try again</button></section></main>
+function Ending({ state, best, dispatch, ending, reduceMotion }: { state: GameState; best: ReturnType<typeof readBest>; dispatch: React.Dispatch<any>; ending: EndingId; reduceMotion: boolean }) {
+  const copy = ENDING_COPY[ending]
+  const humanity = humanityOf(state)
+  const [copyNote, setCopyNote] = useState('')
+  const [showRaw, setShowRaw] = useState(false)
+  const shareText = buildShareText({
+    title: copy.title,
+    score: state.score,
+    strikes: state.strikes,
+    suspicion: state.suspicion,
+    humanity,
+    win: copy.win,
+  })
+  const copyResult = async () => {
+    try {
+      await navigator.clipboard.writeText(shareText)
+      setCopyNote('Copied. Paste your verdict somewhere public.')
+    } catch {
+      setShowRaw(true)
+      setCopyNote('Clipboard unavailable. Select the text below by hand.')
+    }
+  }
+  return (
+    <main className={`start ending crt ${reduceMotion ? 'reduce-motion' : ''}`}>
+      <section className="start-card">
+        <p className="micro">VERIFICATION COMPLETE</p>
+        <h1>{copy.title}</h1>
+        <p className="lede">{copy.lines.join(' ')}</p>
+        <dl className="result">
+          <div><dt>Score</dt><dd>{state.score}</dd></div>
+          <div><dt>Strikes</dt><dd>{state.strikes}/3</dd></div>
+          <div><dt>Suspicion</dt><dd>{state.suspicion}</dd></div>
+          <div><dt>Humanity</dt><dd>{humanity}%</dd></div>
+          <div><dt>Best</dt><dd>{best?.score ?? state.score}</dd></div>
+        </dl>
+        <p className="verdict">Reading: {humanityLabel(humanity)}</p>
+        <div className="actions">
+          <button className="primary" onClick={() => dispatch({ type: 'START_RUN' })}>Try again</button>
+          <button onClick={copyResult}>Copy result</button>
+        </div>
+        {copyNote && <p className="copy-note" aria-live="polite">{copyNote}</p>}
+        {showRaw && <pre className="share-raw">{shareText}</pre>}
+      </section>
+    </main>
+  )
 }
 
 function Debug({ dispatch, state }: { dispatch: React.Dispatch<any>; state: GameState }) {
