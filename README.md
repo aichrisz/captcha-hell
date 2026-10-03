@@ -17,6 +17,16 @@ npm run build
 npm run dev
 ```
 
+## Timer regression
+
+With the app available at `http://127.0.0.1:4193/captcha-hell/` and Playwright installed separately, run:
+
+```bash
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs BASE_URL=http://127.0.0.1:4193/captcha-hell/ node scripts/timer-regression.mjs
+```
+
+`PLAYWRIGHT_MODULE` must point to an installed Playwright module; this regression adds no project dependency.
+
 ## Features
 
 - 10 escalating CAPTCHA rounds

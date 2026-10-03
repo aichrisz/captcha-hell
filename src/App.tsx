@@ -86,6 +86,7 @@ export default function App() {
   const [best, setBest] = useState(readBest)
   const [reduceMotion, setReduceMotion] = useState(false)
   const [timeLeft, setTimeLeft] = useState(20)
+  const [timerIdentity, setTimerIdentity] = useState('')
   const [handledExpiry, setHandledExpiry] = useState('')
   const [message, setMessage] = useState('Awaiting first verification.')
   const beep = useBeep(state.soundOn)
@@ -99,8 +100,13 @@ export default function App() {
   const trailSeq = useRef(0)
 
   useEffect(() => {
-    if (!round) return
+    if (!round) {
+      setTimerIdentity('')
+      return
+    }
+    const key = `${round.id}-${state.attempt}`
     setTimeLeft(round.timerSec || 99)
+    setTimerIdentity(key)
     setHandledExpiry('')
     setMessage(`Round ${round.id}: ${round.type}`)
   }, [round?.id, state.attempt])
@@ -122,13 +128,13 @@ export default function App() {
     if (state.phase !== 'play' || !round || round.timerSec === 0) return
     if (timeLeft > 0 && timeLeft <= 4) beep('tick')
     if (timeLeft !== 0) return
-    const key = `${round.id}-${state.attempt}-${state.strikes}`
-    if (handledExpiry === key) return
+    const key = `${round.id}-${state.attempt}`
+    if (timerIdentity !== key || handledExpiry === key) return
     setHandledExpiry(key)
     dispatch({ type: 'TIMER_EXPIRED' })
     beep('bad')
     setMessage('Time expired. The widget noticed.')
-  }, [state.phase, state.attempt, state.strikes, round?.id, round?.timerSec, timeLeft, handledExpiry, beep])
+  }, [state.phase, state.attempt, round?.id, round?.timerSec, timeLeft, timerIdentity, handledExpiry, beep])
 
   // Fake popup theater: schedule this round's popups once per run. Copy only,
   // rendered inside the app, no real windows or permissions.
