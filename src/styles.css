@@ -118,7 +118,7 @@ h1 { margin: 0; font-size: clamp(3.6rem, 11vw, 8.4rem); letter-spacing: -.08em; 
 .verdict { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); }
 .copy-note { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--green); font-size: .85rem; }
 .share-raw { text-align: left; background: rgba(23, 20, 15, .06); border: 1px dashed var(--line); border-radius: 12px; padding: .8rem; font-size: .85rem; white-space: pre-wrap; user-select: all; }
-.reduce-motion, .reduce-motion *, .reduce-motion *::before, .reduce-motion *::after { animation: none !important; transition-duration: .01ms !important; }
+.reduce-motion, .reduce-motion *, .reduce-motion::before, .reduce-motion::after, .reduce-motion *::before, .reduce-motion *::after { animation: none !important; transition-duration: .01ms !important; }
 .reduce-motion .trail-layer { display: none; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition-duration: .01ms !important; }

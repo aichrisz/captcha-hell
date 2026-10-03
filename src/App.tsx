@@ -84,7 +84,9 @@ function useBeep(soundOn: boolean) {
 export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState)
   const [best, setBest] = useState(readBest)
-  const [reduceMotion, setReduceMotion] = useState(false)
+  const [manualReduceMotion, setManualReduceMotion] = useState(false)
+  const [osReduceMotion, setOsReduceMotion] = useState(() => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false)
+  const reduceMotion = manualReduceMotion || osReduceMotion
   const [timeLeft, setTimeLeft] = useState(20)
   const [timerIdentity, setTimerIdentity] = useState('')
   const [handledExpiry, setHandledExpiry] = useState('')
@@ -98,6 +100,15 @@ export default function App() {
   const [tick, setTick] = useState(0)
   const [trail, setTrail] = useState<TrailDot[]>([])
   const trailSeq = useRef(0)
+
+  useEffect(() => {
+    const media = window.matchMedia?.('(prefers-reduced-motion: reduce)')
+    if (!media) return
+    const update = () => setOsReduceMotion(media.matches)
+    update()
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  }, [])
 
   useEffect(() => {
     if (!round) {
@@ -162,8 +173,10 @@ export default function App() {
 
   // Cursor lag trail: purely visual ghost dots, only with motion at full.
   useEffect(() => {
-    const osReduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
-    if (reduceMotion || osReduced || state.phase !== 'play') return
+    if (reduceMotion || state.phase !== 'play') {
+      setTrail([])
+      return
+    }
     let last = 0
     const onMove = (e: PointerEvent) => {
       const now = performance.now()
@@ -189,7 +202,7 @@ export default function App() {
   }
 
   if (state.phase === 'start') {
-    return <StartScreen best={best} state={state} dispatch={dispatch} setReduceMotion={setReduceMotion} reduceMotion={reduceMotion} />
+    return <StartScreen best={best} state={state} dispatch={dispatch} setReduceMotion={setManualReduceMotion} reduceMotion={manualReduceMotion} />
   }
 
   if (state.phase === 'ending') {
@@ -314,7 +327,7 @@ function Puzzle({ round, state, timeLeft, submit, dispatch, reduceMotion }: { ro
   if (round.type === 'slider') return <SliderPuzzle data={round.data as SliderData} timeLeft={timeLeft} submit={submit} />
   if (round.type === 'wordChoice') return <WordPuzzle data={round.data as WordChoiceData} timeLeft={timeLeft} submit={submit} />
   if (round.type === 'recall') return <RecallPuzzle data={round.data as RecallData} state={state} timeLeft={timeLeft} submit={submit} />
-  return <FinalPuzzle data={round.data as FinalData} dispatch={dispatch} />
+  return <FinalPuzzle data={round.data as FinalData} dispatch={dispatch} reduceMotion={reduceMotion} />
 }
 
 function GridPuzzle({ data, timeLeft, submit }: { data: GridData; timeLeft: number; submit: (r: RoundResult) => void }) {
@@ -351,10 +364,10 @@ function RecallPuzzle({ data, state, timeLeft, submit }: { data: RecallData; sta
   return <div><h2>{data.prompt}</h2><div className="choices number-choices">{options.map((n) => <button key={n} onClick={() => submit({ passed: evalRecall(n, actual), timeLeftSec: timeLeft, strikeSource: 'wrongSubmit' })}>{n}</button>)}</div></div>
 }
 
-function FinalPuzzle({ data, dispatch }: { data: FinalData; dispatch: React.Dispatch<any> }) {
+function FinalPuzzle({ data, dispatch, reduceMotion }: { data: FinalData; dispatch: React.Dispatch<any>; reduceMotion: boolean }) {
   const [box, setBox] = useState(initCheckbox())
   const frozen = box.frozen
-  return <div><h2>{data.prompt}</h2><button className="checkbox final-box" style={{ transform: `translate(${box.offsetX}px, ${box.offsetY}px)` }} onClick={() => setBox((s) => nextCheckboxState(s, data.checkbox, false).state)}><span>{box.frozen ? '?' : ''}</span>{data.checkbox.prompt}</button>{frozen && <div className="choices">{data.word.options.map((opt, i) => <button key={opt} onClick={() => dispatch({ type: 'FINAL_CHOICE', choice: data.word.branch?.[i] ?? 'trying' })}>{opt}</button>)}</div>}</div>
+  return <div><h2>{data.prompt}</h2><button className="checkbox final-box" style={{ transform: `translate(${box.offsetX}px, ${box.offsetY}px)` }} onClick={() => setBox((s) => nextCheckboxState(s, data.checkbox, reduceMotion).state)}><span>{box.frozen ? '?' : ''}</span>{data.checkbox.prompt}</button>{frozen && <div className="choices">{data.word.options.map((opt, i) => <button key={opt} onClick={() => dispatch({ type: 'FINAL_CHOICE', choice: data.word.branch?.[i] ?? 'trying' })}>{opt}</button>)}</div>}</div>
 }
 
 function Ending({ state, best, dispatch, ending, reduceMotion }: { state: GameState; best: ReturnType<typeof readBest>; dispatch: React.Dispatch<any>; ending: EndingId; reduceMotion: boolean }) {
