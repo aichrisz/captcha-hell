@@ -57,6 +57,7 @@ export interface GameState {
   history: RoundAnswer[]
   soundOn: boolean
   attempt: number       // attempts spent on current round, 0 = first try
+  appealUsed: boolean
   ending?: EndingId
   ambiguousChoice?: AmbiguousChoice
   finalChoice?: FinalChoice
@@ -72,4 +73,5 @@ export type Action =
   | { type: 'END_RUN'; ending: EndingId }
   | { type: 'RESTART' }
   | { type: 'SOUND_TOGGLE' }
+  | { type: 'APPEAL_VERDICT' }
   | { type: 'DEBUG_SET'; patch: Partial<GameState> }

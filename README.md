@@ -22,6 +22,7 @@ npm run dev
 - 10 escalating CAPTCHA rounds
 - Grid, checkbox, timed click, slider, word choice, recall, and final statement puzzles
 - Score, strikes, suspicion, timer, and branching endings
+- Once-per-run appeal: trade 50 points to remove up to 20 suspicion
 - Sound toggle with WebAudio cues
 - Best score in localStorage
 - Debug controls via `?debug=1`

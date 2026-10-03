@@ -199,6 +199,30 @@ export default function App() {
           <p className="micro">SECURE HUMAN VERIFICATION</p>
           <h1>Captcha Hell</h1>
           {round && <Puzzle round={round} state={state} timeLeft={timeLeft} submit={submit} dispatch={dispatch} reduceMotion={reduceMotion} />}
+          {round && (
+            <div>
+              <button
+                disabled={state.appealUsed || state.score < 50 || state.suspicion <= 0}
+                aria-describedby="appeal-status"
+                onClick={() => {
+                  dispatch({ type: 'APPEAL_VERDICT' })
+                  setMessage('Appeal accepted: 50 points spent; suspicion reduced by up to 20.')
+                }}
+              >Appeal verdict</button>
+              <p className="hint">Cost: 50 points. Removes up to 20 suspicion, clamped at zero.</p>
+              <p id="appeal-status" className="hint">
+                {state.appealUsed
+                  ? 'Already used this run.'
+                  : state.score < 50 && state.suspicion <= 0
+                    ? 'Unavailable: need at least 50 points and suspicion above zero.'
+                    : state.score < 50
+                      ? 'Unavailable: need at least 50 points.'
+                      : state.suspicion <= 0
+                        ? 'Unavailable: no suspicion to remove.'
+                        : 'Available once per run.'}
+              </p>
+            </div>
+          )}
           <p className="message" aria-live="polite">{message}</p>
         </section>
         <aside className="terms">

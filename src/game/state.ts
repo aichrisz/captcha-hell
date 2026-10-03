@@ -15,6 +15,7 @@ export const initialState: GameState = {
   history: [],
   soundOn: true,
   attempt: 0,
+  appealUsed: false,
 }
 
 function endRun(state: GameState): GameState {
@@ -106,6 +107,10 @@ export function reducer(state: GameState, action: Action): GameState {
       const next = { ...state, suspicion }
       return suspicion >= 100 ? endRun(next) : next
     }
+
+    case 'APPEAL_VERDICT':
+      if (state.phase !== 'play' || state.appealUsed || state.score < 50 || state.suspicion <= 0) return state
+      return { ...state, score: state.score - 50, suspicion: Math.max(0, state.suspicion - 20), appealUsed: true }
 
     case 'TIMER_EXPIRED': {
       if (state.phase !== 'play') return state

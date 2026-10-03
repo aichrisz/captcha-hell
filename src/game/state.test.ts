@@ -180,6 +180,59 @@ describe('reducer', () => {
     expect(patched.suspicion).toBe(42)
   })
 
+  it('appeal trades 50 score for 20 suspicion without changing run progress', () => {
+    const eligible: GameState = {
+      ...playing,
+      round: 4,
+      score: 120,
+      strikes: 1,
+      suspicion: 35,
+      attempt: 2,
+      history: [{ round: 1, passed: true, count: 3 }],
+    }
+    const s = reducer(eligible, { type: 'APPEAL_VERDICT' })
+    expect(s.score).toBe(70)
+    expect(s.suspicion).toBe(15)
+    expect(s.strikes).toBe(eligible.strikes)
+    expect(s.round).toBe(eligible.round)
+    expect(s.attempt).toBe(eligible.attempt)
+    expect(s.history).toBe(eligible.history)
+    expect(s.appealUsed).toBe(true)
+    expect(reducer(s, { type: 'APPEAL_VERDICT' })).toBe(s)
+  })
+
+  it('appeal clamps suspicion at zero', () => {
+    const eligible = { ...playing, score: 50, suspicion: 12 }
+    const s = reducer(eligible, { type: 'APPEAL_VERDICT' })
+    expect(s.score).toBe(0)
+    expect(s.suspicion).toBe(0)
+  })
+
+  it('appeal returns the exact state when score is insufficient or suspicion is zero', () => {
+    const poor = { ...playing, score: 49, suspicion: 50 }
+    const clear = { ...playing, score: 100, suspicion: 0 }
+    expect(reducer(poor, { type: 'APPEAL_VERDICT' })).toBe(poor)
+    expect(reducer(clear, { type: 'APPEAL_VERDICT' })).toBe(clear)
+  })
+
+  it('appeal is ignored outside play and on repeat use', () => {
+    const ended = reducer(playing, { type: 'END_RUN', ending: 'ghost' })
+    const used = { ...playing, score: 100, suspicion: 50, appealUsed: true } as GameState
+    expect(reducer(initialState, { type: 'APPEAL_VERDICT' })).toBe(initialState)
+    expect(reducer(ended, { type: 'APPEAL_VERDICT' })).toBe(ended)
+    expect(reducer(used, { type: 'APPEAL_VERDICT' })).toBe(used)
+  })
+
+  it('START_RUN and RESTART reset appeal availability', () => {
+    const used = { ...playing, appealUsed: true } as GameState
+    const started = reducer(used, { type: 'START_RUN' })
+    const restarted = reducer(used, { type: 'RESTART' })
+    expect(started.appealUsed).toBe(false)
+    expect(restarted.appealUsed).toBe(false)
+    expect(started.soundOn).toBe(used.soundOn)
+    expect(restarted.soundOn).toBe(used.soundOn)
+  })
+
   it('submits are ignored outside play', () => {
     const s = reducer(initialState, {
       type: 'SUBMIT_ROUND',
