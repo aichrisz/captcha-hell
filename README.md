@@ -27,6 +27,16 @@ PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs BASE_URL=http://127.0.0
 
 `PLAYWRIGHT_MODULE` must point to an installed Playwright module; this regression adds no project dependency.
 
+## Timed-click regression
+
+With the app available at `http://127.0.0.1:4193/captcha-hell/` and Playwright installed separately, run:
+
+```bash
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs BASE_URL=http://127.0.0.1:4193/captcha-hell/ node scripts/timed-click-regression.mjs
+```
+
+The browser regression checks the configured fake flash and inclusive real-window edges, retry scheduling, activation methods, mobile overflow, and JavaScript errors without adding a project dependency.
+
 ## Reduced-motion regression
 
 With the app available at `http://127.0.0.1:4193/captcha-hell/` and Playwright installed separately, run:

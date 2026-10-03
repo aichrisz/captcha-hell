@@ -12,6 +12,8 @@ import type { GridData } from './game/puzzles/grid'
 import { validateGrid } from './game/puzzles/grid'
 import type { RecallData } from './game/puzzles/recall'
 import { buildRecallOptions, evalRecall } from './game/puzzles/recall'
+import type { TimedClickData } from './game/puzzles/timedClick'
+import { evalClick } from './game/puzzles/timedClick'
 import type { SliderData } from './game/puzzles/slider'
 import { attemptSlider } from './game/puzzles/slider'
 import type { WordChoiceData } from './game/puzzles/wordChoice'
@@ -323,7 +325,7 @@ function Meter({ label, value, max, danger, plain, blue }: { label: string; valu
 function Puzzle({ round, state, timeLeft, submit, dispatch, reduceMotion }: { round: ReturnType<typeof getRound>; state: GameState; timeLeft: number; submit: (r: RoundResult) => void; dispatch: React.Dispatch<any>; reduceMotion: boolean }) {
   if (round.type === 'grid') return <GridPuzzle data={round.data as GridData} timeLeft={timeLeft} submit={submit} />
   if (round.type === 'checkbox') return <CheckboxPuzzle data={round.data as CheckboxData} timeLeft={timeLeft} submit={submit} reduceMotion={reduceMotion} />
-  if (round.type === 'timedClick') return <TimedClick timeLeft={timeLeft} submit={submit} />
+  if (round.type === 'timedClick') return <TimedClick data={round.data as TimedClickData} attempt={state.attempt} timeLeft={timeLeft} submit={submit} />
   if (round.type === 'slider') return <SliderPuzzle data={round.data as SliderData} timeLeft={timeLeft} submit={submit} />
   if (round.type === 'wordChoice') return <WordPuzzle data={round.data as WordChoiceData} timeLeft={timeLeft} submit={submit} />
   if (round.type === 'recall') return <RecallPuzzle data={round.data as RecallData} state={state} timeLeft={timeLeft} submit={submit} />
@@ -341,10 +343,52 @@ function CheckboxPuzzle({ data, timeLeft, submit, reduceMotion }: { data: Checkb
   return <div><h2>{data.prompt}</h2><button className="checkbox" style={{ transform: `translate(${box.offsetX}px, ${box.offsetY}px)` }} onClick={() => { const step = nextCheckboxState(box, data, reduceMotion); setBox(step.state); if (step.event === 'checked') submit({ passed: true, timeLeftSec: timeLeft }); }}><span>{box.checked ? '✓' : box.frozen ? '?' : ''}</span>I am not a robot</button>{box.frozen && <p className="hint">The checkbox has frozen. It wants a statement, not a click.</p>}</div>
 }
 
-function TimedClick({ timeLeft, submit }: { timeLeft: number; submit: (r: RoundResult) => void }) {
-  const [ready, setReady] = useState(false)
-  useEffect(() => { const id = window.setTimeout(() => setReady(true), 2200); return () => window.clearTimeout(id) }, [])
-  return <div><h2>Click VERIFY when it turns green. Not before.</h2><button className={ready ? 'primary verify ready' : 'verify'} onClick={() => submit({ passed: ready, timeLeftSec: timeLeft, strikeSource: ready ? undefined : 'earlyClick' })}>{ready ? 'VERIFY' : 'wait'}</button></div>
+function TimedClick({ data, attempt, timeLeft, submit }: { data: TimedClickData; attempt: number; timeLeft: number; submit: (r: RoundResult) => void }) {
+  const [phase, setPhase] = useState<'waiting' | 'fakeout' | 'gap' | 'open' | 'closed'>('waiting')
+  const attemptStartedAt = useRef(0)
+  const fakeoutEndMs = data.fakeoutDelayMs + data.fakeoutFlashMs
+  const windowOpenMs = fakeoutEndMs + data.realDelayMs
+  const windowCloseMs = windowOpenMs + data.windowMs
+
+  useEffect(() => {
+    attemptStartedAt.current = performance.now()
+    setPhase('waiting')
+    const timers = [
+      window.setTimeout(() => setPhase('fakeout'), data.fakeoutDelayMs),
+      window.setTimeout(() => setPhase('gap'), fakeoutEndMs),
+      window.setTimeout(() => setPhase('open'), windowOpenMs),
+      window.setTimeout(() => setPhase('closed'), windowCloseMs),
+    ]
+    return () => timers.forEach((timer) => window.clearTimeout(timer))
+  }, [attempt, data.fakeoutDelayMs, data.fakeoutFlashMs, data.realDelayMs, data.windowMs, fakeoutEndMs, windowOpenMs, windowCloseMs])
+
+  const ready = phase === 'open'
+  const status = phase === 'fakeout'
+    ? 'Fake green flash - decoy. Do not click.'
+    : phase === 'gap'
+      ? 'Fake flash ended. Verification is not open.'
+      : ready
+        ? 'Verification window open. Click VERIFY now.'
+        : phase === 'closed'
+          ? 'Verification window closed.'
+          : 'Waiting for the verification signal.'
+
+  return <div>
+    <h2>{data.prompt}</h2>
+    <p className="hint timed-click-status" role="status">{status}</p>
+    <button
+      className={ready ? 'primary verify ready' : phase === 'fakeout' ? 'primary verify fakeout' : 'verify'}
+      onClick={() => {
+        const elapsedMs = performance.now() - attemptStartedAt.current
+        const result = evalClick(elapsedMs, windowOpenMs, windowCloseMs, elapsedMs >= fakeoutEndMs)
+        submit({
+          passed: result === 'pass',
+          timeLeftSec: timeLeft,
+          strikeSource: result === 'early' ? 'earlyClick' : result === 'late' ? 'wrongSubmit' : undefined,
+        })
+      }}
+    >{ready || phase === 'fakeout' ? 'VERIFY' : 'wait'}</button>
+  </div>
 }
 
 function SliderPuzzle({ data, timeLeft, submit }: { data: SliderData; timeLeft: number; submit: (r: RoundResult) => void }) {
