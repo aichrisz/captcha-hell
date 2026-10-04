@@ -49,6 +49,41 @@ async function assertTransform(locator, expected, context) {
   assert.equal(actual, expected, `${context}: expected transform ${expected}, got ${actual}`)
 }
 
+async function assertCheckboxContained(locator, context) {
+  await locator.page().waitForTimeout(250)
+  const geometry = await locator.evaluate((element) => {
+    const box = element.getBoundingClientRect()
+    const widget = element.closest('.widget')
+    const area = widget.getBoundingClientRect()
+    const style = getComputedStyle(widget)
+    const left = area.left + parseFloat(style.paddingLeft)
+    const right = area.right - parseFloat(style.paddingRight)
+    const top = area.top + parseFloat(style.paddingTop)
+    const bottom = area.bottom - parseFloat(style.paddingBottom)
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+    return {
+      box: { left: box.left, right: box.right, top: box.top, bottom: box.bottom },
+      area: { left, right, top, bottom },
+      hit: Boolean(hit && (hit === element || element.contains(hit))),
+    }
+  })
+  assert.ok(geometry.box.left >= geometry.area.left - 1 && geometry.box.right <= geometry.area.right + 1, `${context}: checkbox escapes padded widget: ${JSON.stringify(geometry)}`)
+  assert.ok(geometry.box.top >= geometry.area.top - 1 && geometry.box.bottom <= geometry.area.bottom + 1, `${context}: checkbox escapes vertical play area: ${JSON.stringify(geometry)}`)
+  assert.equal(geometry.hit, true, `${context}: checkbox center is not hit-testable`)
+}
+
+async function assertRequestedViewportWidth(page, context) {
+  const requested = page.viewportSize().width
+  const geometry = await page.evaluate((width) => ({
+    requested: width,
+    client: document.documentElement.clientWidth,
+    document: document.documentElement.scrollWidth,
+    body: document.body.scrollWidth,
+  }), requested)
+  assert.ok(geometry.document <= requested + 1, `${context}: document scrollWidth ${geometry.document} exceeds requested ${requested}px (clientWidth ${geometry.client})`)
+  assert.ok(geometry.body <= requested + 1, `${context}: body scrollWidth ${geometry.body} exceeds requested ${requested}px`)
+}
+
 async function assertReduced(page, label) {
   await page.waitForFunction(() => document.querySelector('.app')?.classList.contains('reduce-motion'))
   assert.equal(await page.locator('.app').evaluate((element) => element.classList.contains('reduce-motion')), true, `${label}: effective reduced-motion class`)
@@ -66,12 +101,14 @@ try {
     const checkbox = page.locator('.checkbox').first()
     await checkbox.click()
     await assertTransform(checkbox, reduced ? 'translate(0px, 0px)' : 'translate(110px, 34px)', `round 2 ${mode}, activation 1`)
+    await assertCheckboxContained(checkbox, `round 2 ${mode}, activation 1`)
     if (reduced) {
       await checkbox.click()
       assert.equal(await page.locator('.hud .stat').nth(4).innerText(), 'ROUND\n3/10', `round 2 ${mode}: reduced checkbox remains operable`)
     } else {
       await checkbox.click()
       await assertTransform(checkbox, 'translate(-96px, 58px)', `round 2 ${mode}, activation 2`)
+      await assertCheckboxContained(checkbox, `round 2 ${mode}, activation 2`)
       await checkbox.click()
       assert.equal(await page.locator('.hud .stat').nth(4).innerText(), 'ROUND\n3/10', `round 2 ${mode}: full-motion checkbox remains operable`)
     }
@@ -88,6 +125,7 @@ try {
       await checkbox.click()
       const expected = reduced || activation === activations ? 'translate(0px, 0px)' : activation === 1 ? 'translate(110px, 34px)' : 'translate(-96px, 58px)'
       await assertTransform(checkbox, expected, `round 10 ${mode}, activation ${activation}`)
+      await assertCheckboxContained(checkbox, `round 10 ${mode}, activation ${activation}`)
     }
     assert.equal(await page.getByRole('button', { name: 'I am human', exact: true }).count(), 1, `round 10 ${mode}: freezes and reveals final choices`)
     assert.equal(await page.locator('.choices button').count(), 3)
@@ -176,7 +214,7 @@ try {
     const checkbox = page.locator('.final-box')
     const box = await checkbox.boundingBox()
     assert.ok(box && box.height >= 44, `final checkbox meets 44px target at ${width}px`)
-    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `no horizontal overflow at ${width}px`)
+    await assertRequestedViewportWidth(page, `round 10 before choice at ${width}px`)
     await checkbox.tap()
     await assertTransform(checkbox, 'translate(0px, 0px)', `touch activation at ${width}px`)
     await checkbox.tap()
@@ -185,9 +223,24 @@ try {
     assert.ok(choiceBox && choiceBox.height >= 44, `final choice meets 44px target at ${width}px`)
     await choices.first().tap()
     assert.equal(await page.getByText('VERIFICATION COMPLETE', { exact: true }).count(), 1, `touch choice works at ${width}px`)
-    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, `ending has no horizontal overflow at ${width}px`)
+    await assertRequestedViewportWidth(page, `ending at ${width}px`)
     await closePage(page)
     console.log(`PASS: ${width}px touch targets, final interaction, and horizontal overflow.`)
+  }
+
+  {
+    const page = await openRun({ mode: 'full', round: 2, width: 1440 })
+    const checkbox = page.locator('.checkbox').first()
+    await checkbox.click()
+    await assertTransform(checkbox, 'translate(110px, 34px)', 'desktop round 2 raw dodge 1')
+    await page.waitForTimeout(250)
+    assert.match(await checkbox.evaluate((element) => getComputedStyle(element).transform), /matrix\(1, 0, 0, 1, 110, 34\)/, 'desktop preserves the full raw first dodge transform')
+    await checkbox.click()
+    await assertTransform(checkbox, 'translate(-96px, 58px)', 'desktop round 2 raw dodge 2')
+    await page.waitForTimeout(250)
+    assert.match(await checkbox.evaluate((element) => getComputedStyle(element).transform), /matrix\(1, 0, 0, 1, -96, 58\)/, 'desktop preserves the full raw second dodge transform')
+    await closePage(page)
+    console.log('PASS: desktop keeps the original raw checkbox dodge distances.')
   }
 
   assert.deepEqual(pageErrors, [], `browser page errors: ${pageErrors.join('; ')}`)

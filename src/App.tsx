@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { reducer, initialState } from './game/state'
 import { getRound, type FinalData } from './game/rounds'
 import { ENDING_COPY } from './game/endings'
@@ -166,6 +166,23 @@ export default function App() {
     return () => timers.forEach((t) => window.clearTimeout(t))
   }, [state.phase, round?.id])
 
+  useLayoutEffect(() => {
+    if (state.phase !== 'play') return
+    const app = document.querySelector<HTMLElement>('.app')
+    const hud = app?.querySelector<HTMLElement>('.hud')
+    if (!app || !hud) return
+    const updateClearance = () => app.style.setProperty('--mobile-hud-clearance', `${Math.ceil(hud.getBoundingClientRect().bottom + 8)}px`)
+    const observer = new ResizeObserver(updateClearance)
+    observer.observe(hud)
+    window.addEventListener('resize', updateClearance)
+    updateClearance()
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', updateClearance)
+      app.style.removeProperty('--mobile-hud-clearance')
+    }
+  }, [state.phase])
+
   // Rotating flavor line in the notes panel.
   useEffect(() => {
     if (state.phase !== 'play') return
@@ -221,7 +238,7 @@ export default function App() {
           <h1>Captcha Hell</h1>
           {round && <Puzzle round={round} state={state} timeLeft={timeLeft} submit={submit} dispatch={dispatch} reduceMotion={reduceMotion} />}
           {round && (
-            <div>
+            <div className="appeal">
               <button
                 disabled={state.appealUsed || state.score < 50 || state.suspicion <= 0}
                 aria-describedby="appeal-status"
@@ -267,7 +284,7 @@ export default function App() {
       {popups.length > 0 && (
         <div className="popup-layer">
           {popups.map((p, i) => (
-            <div key={p.id} className="popup" role="alert" aria-label={p.title} style={{ transform: `translate(${i * 12}px, ${i * 12}px)` }}>
+            <div key={p.id} className="popup" role="alert" aria-label={p.title} style={{ '--popup-offset': `${i * 12}px` } as React.CSSProperties}>
               <div className="popup-title"><span>{p.title}</span><span aria-hidden="true">x</span></div>
               <p className="popup-body">{p.body}</p>
               <button onClick={() => dismissPopup(p.id)}>{p.dismiss}</button>
@@ -340,7 +357,7 @@ function GridPuzzle({ data, timeLeft, submit }: { data: GridData; timeLeft: numb
 
 function CheckboxPuzzle({ data, timeLeft, submit, reduceMotion }: { data: CheckboxData; timeLeft: number; submit: (r: RoundResult) => void; reduceMotion: boolean }) {
   const [box, setBox] = useState(initCheckbox())
-  return <div><h2>{data.prompt}</h2><button className="checkbox" style={{ transform: `translate(${box.offsetX}px, ${box.offsetY}px)` }} onClick={() => { const step = nextCheckboxState(box, data, reduceMotion); setBox(step.state); if (step.event === 'checked') submit({ passed: true, timeLeftSec: timeLeft }); }}><span>{box.checked ? '✓' : box.frozen ? '?' : ''}</span>I am not a robot</button>{box.frozen && <p className="hint">The checkbox has frozen. It wants a statement, not a click.</p>}</div>
+  return <div><h2>{data.prompt}</h2><button className="checkbox" style={{ transform: `translate(${box.offsetX}px, ${box.offsetY}px)`, '--dodge-x': `${box.offsetX}px`, '--dodge-y': `${box.offsetY}px` } as React.CSSProperties} onClick={() => { const step = nextCheckboxState(box, data, reduceMotion); setBox(step.state); if (step.event === 'checked') submit({ passed: true, timeLeftSec: timeLeft }); }}><span>{box.checked ? '✓' : box.frozen ? '?' : ''}</span>I am not a robot</button>{box.frozen && <p className="hint">The checkbox has frozen. It wants a statement, not a click.</p>}</div>
 }
 
 function TimedClick({ data, attempt, timeLeft, submit }: { data: TimedClickData; attempt: number; timeLeft: number; submit: (r: RoundResult) => void }) {
@@ -411,7 +428,7 @@ function RecallPuzzle({ data, state, timeLeft, submit }: { data: RecallData; sta
 function FinalPuzzle({ data, dispatch, reduceMotion }: { data: FinalData; dispatch: React.Dispatch<any>; reduceMotion: boolean }) {
   const [box, setBox] = useState(initCheckbox())
   const frozen = box.frozen
-  return <div><h2>{data.prompt}</h2><button className="checkbox final-box" style={{ transform: `translate(${box.offsetX}px, ${box.offsetY}px)` }} onClick={() => setBox((s) => nextCheckboxState(s, data.checkbox, reduceMotion).state)}><span>{box.frozen ? '?' : ''}</span>{data.checkbox.prompt}</button>{frozen && <div className="choices">{data.word.options.map((opt, i) => <button key={opt} onClick={() => dispatch({ type: 'FINAL_CHOICE', choice: data.word.branch?.[i] ?? 'trying' })}>{opt}</button>)}</div>}</div>
+  return <div><h2>{data.prompt}</h2><button className="checkbox final-box" style={{ transform: `translate(${box.offsetX}px, ${box.offsetY}px)`, '--dodge-x': `${box.offsetX}px`, '--dodge-y': `${box.offsetY}px` } as React.CSSProperties} onClick={() => setBox((s) => nextCheckboxState(s, data.checkbox, reduceMotion).state)}><span>{box.frozen ? '?' : ''}</span>{data.checkbox.prompt}</button>{frozen && <div className="choices">{data.word.options.map((opt, i) => <button key={opt} onClick={() => dispatch({ type: 'FINAL_CHOICE', choice: data.word.branch?.[i] ?? 'trying' })}>{opt}</button>)}</div>}</div>
 }
 
 function Ending({ state, best, dispatch, ending, reduceMotion }: { state: GameState; best: ReturnType<typeof readBest>; dispatch: React.Dispatch<any>; ending: EndingId; reduceMotion: boolean }) {
