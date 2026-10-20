@@ -8,6 +8,10 @@ function run(state: GameState, ...actions: Action[]): GameState {
 
 const playing = reducer(initialState, { type: 'START_RUN' })
 
+function readyFinal(state: GameState): GameState {
+  return reducer(reducer(state, { type: 'DEBUG_SET', patch: { round: 10 } }), { type: 'FINAL_READY' })
+}
+
 describe('reducer', () => {
   it('initial state is the start screen', () => {
     expect(initialState.phase).toBe('start')
@@ -122,39 +126,54 @@ describe('reducer', () => {
     expect(s.round).toBe(9)
     expect(s.strikes).toBe(1)
     expect(s.history).toEqual([{ round: 8, passed: false }])
+    expect(s.lastVerdict).toMatchObject({ action: 'TIMER_EXPIRED', round: 8, outcome: 'Time expired; advanced after failure' })
+  })
+
+  it('distinguishes expiry from a wrong terminal submission', () => {
+    const at9 = { ...playing, round: 9, strikes: 2 }
+    const expired = reducer(at9, { type: 'TIMER_EXPIRED' })
+    const submitted = reducer({ ...playing, strikes: 2 }, {
+      type: 'SUBMIT_ROUND', result: { passed: false, timeLeftSec: 0, strikeSource: 'wrongSubmit' },
+    })
+    expect(expired).toMatchObject({ phase: 'ending', ending: 'rejected', lastVerdict: { outcome: 'Time expired; run ended' } })
+    expect(submitted).toMatchObject({ phase: 'ending', ending: 'rejected', lastVerdict: { outcome: 'Rejected; run ended' } })
   })
 
   it('FINAL_CHOICE matter scores 300 and ends as ghost', () => {
-    const at10 = reducer(playing, { type: 'DEBUG_SET', patch: { round: 10, suspicion: 60 } })
+    const at10 = readyFinal({ ...playing, suspicion: 60 })
     const s = reducer(at10, { type: 'FINAL_CHOICE', choice: 'matter' })
     expect(s.phase).toBe('ending')
     expect(s.ending).toBe('ghost')
     expect(s.score).toBe(300)
     expect(s.finalChoice).toBe('matter')
+    expect(s.lastVerdict?.outcome).toBe('Final classification: GHOST IN THE FORM')
   })
 
   it('FINAL_CHOICE human with low suspicion verifies', () => {
-    const at10 = reducer(playing, { type: 'DEBUG_SET', patch: { round: 10, suspicion: 10 } })
+    const at10 = readyFinal({ ...playing, suspicion: 10 })
     const s = reducer(at10, { type: 'FINAL_CHOICE', choice: 'human' })
     expect(s.ending).toBe('verified')
     expect(s.score).toBe(200)
+    expect(s.lastVerdict?.outcome).toBe('Final classification: VERIFIED: HUMAN')
   })
 
   it('FINAL_CHOICE human with high suspicion is probablyHuman', () => {
-    const at10 = reducer(playing, { type: 'DEBUG_SET', patch: { round: 10, suspicion: 60 } })
+    const at10 = readyFinal({ ...playing, suspicion: 60 })
     const s = reducer(at10, { type: 'FINAL_CHOICE', choice: 'human' })
     expect(s.ending).toBe('probablyHuman')
+    expect(s.lastVerdict?.outcome).toBe('Final classification: STATUS: PROBABLY HUMAN')
   })
 
   it('FINAL_CHOICE human can unlock tooPerfect after a flawless full run', () => {
     const flawlessHistory = Array.from({ length: 9 }, (_, i) => ({ round: i + 1, passed: true }))
-    const at10 = reducer(playing, {
+    const at10 = readyFinal(reducer(playing, {
       type: 'DEBUG_SET',
       patch: { round: 10, suspicion: 0, strikes: 0, score: 1700, history: flawlessHistory },
-    })
+    }))
     const s = reducer(at10, { type: 'FINAL_CHOICE', choice: 'human' })
     expect(s.phase).toBe('ending')
     expect(s.ending).toBe('tooPerfect')
+    expect(s.lastVerdict?.outcome).toBe('Final classification: ANOMALY: TOO PERFECT')
   })
 
   it('RESTART resets the run but keeps sound pref', () => {
@@ -169,6 +188,78 @@ describe('reducer', () => {
     expect(s.score).toBe(0)
     expect(s.round).toBe(1)
     expect(s.soundOn).toBe(false)
+  })
+
+  it('records accepted verdict deltas and distinguishes retry from advance', () => {
+    const failed = reducer(playing, {
+      type: 'SUBMIT_ROUND',
+      result: { passed: false, timeLeftSec: 10, strikeSource: 'wrongSubmit' },
+    })
+    expect(failed.lastVerdict).toMatchObject({
+      sequence: 1, action: 'SUBMIT_ROUND', round: 1, outcome: 'Rejected; retry available',
+      before: { score: 0, strikes: 0, suspicion: 0 },
+      after: { score: 0, strikes: 1, suspicion: 10 },
+      delta: { score: 0, strikes: 1, suspicion: 10 },
+    })
+    const passed = reducer(failed, { type: 'SUBMIT_ROUND', result: { passed: true, timeLeftSec: 10 } })
+    expect(passed.lastVerdict).toMatchObject({ sequence: 2, outcome: 'Accepted; next challenge opened', delta: { score: 110, strikes: 0, suspicion: 0 } })
+
+    const advanced = reducer(reducer(playing, { type: 'DEBUG_SET', patch: { round: 7 } }), {
+      type: 'SUBMIT_ROUND', result: { passed: false, timeLeftSec: 10, strikeSource: 'singleAttemptFail' },
+    })
+    expect(advanced.lastVerdict).toMatchObject({ round: 7, outcome: 'Rejected; advanced after failure', delta: { strikes: 1, suspicion: 20 } })
+  })
+
+  it('sequences identical timer expiries and does not create receipts for no-ops or debug changes', () => {
+    const first = reducer(playing, { type: 'TIMER_EXPIRED' })
+    const second = reducer(first, { type: 'TIMER_EXPIRED' })
+    expect(first.lastVerdict).toMatchObject({ sequence: 1, action: 'TIMER_EXPIRED', outcome: 'Time expired; retry available' })
+    expect(second.lastVerdict).toMatchObject({ sequence: 2, action: 'TIMER_EXPIRED', outcome: 'Time expired; retry available' })
+    expect(reducer(second, { type: 'TIMER_EXPIRED' }).lastVerdict?.sequence).toBe(3)
+    expect(reducer(initialState, { type: 'APPEAL_VERDICT' }).lastVerdict).toBeUndefined()
+    expect(reducer(second, { type: 'DEBUG_SET', patch: { score: 999 } }).lastVerdict).toBe(second.lastVerdict)
+  })
+
+  it('appeal receipt reports the resolved clamped suspicion and actual score cost', () => {
+    const eligible = { ...playing, score: 50, suspicion: 12 }
+    const appealed = reducer(eligible, { type: 'APPEAL_VERDICT' })
+    expect(appealed.lastVerdict).toMatchObject({
+      action: 'APPEAL_VERDICT', before: { score: 50, strikes: 0, suspicion: 12 },
+      after: { score: 0, strikes: 0, suspicion: 0 }, delta: { score: -50, strikes: 0, suspicion: -12 },
+    })
+    expect(reducer(appealed, { type: 'APPEAL_VERDICT' })).toBe(appealed)
+  })
+
+  it('final choices require final readiness and preserve their score/history result', () => {
+    const early = { ...playing, round: 10 }
+    expect(reducer(early, { type: 'FINAL_CHOICE', choice: 'human' })).toBe(early)
+    const ready = reducer(early, { type: 'FINAL_READY' })
+    expect(ready.finalReady).toBe(true)
+    expect(reducer(ready, { type: 'FINAL_READY' })).toBe(ready)
+    const chosen = reducer(ready, { type: 'FINAL_CHOICE', choice: 'human' })
+    expect(chosen.phase).toBe('ending')
+    expect(chosen.lastVerdict).toMatchObject({ action: 'FINAL_CHOICE', round: 10, outcome: 'Final classification: VERIFIED: HUMAN', delta: { score: 200 } })
+  })
+
+  it('refusal requires readiness, flags at exactly 100, and preserves score, strikes, and history', () => {
+    const early = { ...playing, round: 10 }
+    expect(reducer(early, { type: 'REFUSE_VERIFICATION' })).toBe(early)
+    for (const suspicion of [0, 37]) {
+      const before = { ...playing, round: 10, suspicion, score: 245, strikes: 1, history: [{ round: 1, passed: true, count: 3 }] }
+      const after = reducer(reducer(before, { type: 'FINAL_READY' }), { type: 'REFUSE_VERIFICATION' })
+      expect(after).toMatchObject({ phase: 'ending', ending: 'flagged', suspicion: 100, score: 245, strikes: 1, history: before.history })
+      expect(after.finalChoice).toBeUndefined()
+      expect(after.lastVerdict).toMatchObject({ action: 'REFUSE_VERIFICATION', outcome: 'Verification refused; account flagged', delta: { score: 0, strikes: 0, suspicion: 100 - suspicion } })
+    }
+  })
+
+  it('run start/restart clears receipt and final readiness', () => {
+    const ready = { ...playing, round: 10, finalReady: true }
+    const withReceipt = reducer(ready, { type: 'FINAL_CHOICE', choice: 'human' })
+    expect(reducer(withReceipt, { type: 'START_RUN' }).lastVerdict).toBeUndefined()
+    expect(reducer(withReceipt, { type: 'START_RUN' }).finalReady).toBe(false)
+    expect(reducer(withReceipt, { type: 'RESTART' }).lastVerdict).toBeUndefined()
+    expect(reducer(withReceipt, { type: 'RESTART' }).finalReady).toBe(false)
   })
 
   it('END_RUN forces an ending and DEBUG_SET patches state', () => {

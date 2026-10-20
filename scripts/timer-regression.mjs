@@ -30,12 +30,22 @@ async function assertHud(page, round, timer, strikes) {
   assert.equal(hud.strikes, String(strikes), `strike HUD: ${JSON.stringify(hud)}`)
 }
 
+async function waitForHud(page, round, timer, strikes) {
+  await page.waitForFunction(({ expectedRound, expectedTimer, expectedStrikes }) => {
+    const rows = [...document.querySelectorAll('.hud .stat')].map((element) => element.innerText.split('\n').map((part) => part.trim()))
+    const hud = Object.fromEntries(rows.map(([label, value]) => [label.toLowerCase(), value]))
+    return hud.round === `${expectedRound}/10` && hud.timer === expectedTimer && hud.strikes === String(expectedStrikes)
+  }, { expectedRound: round, expectedTimer: timer, expectedStrikes: strikes })
+  await assertHud(page, round, timer, strikes)
+}
+
 async function openRun(round = 1) {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } })
   pages.add(page)
   page.on('pageerror', (error) => pageErrors.push(error.message))
   await page.clock.install()
   await page.goto(debugURL())
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000))
   await page.getByRole('button', { name: 'Begin verification', exact: true }).click()
   for (let current = 1; current < round; current += 1) {
     await page.getByRole('button', { name: 'Next round', exact: true }).click()
@@ -54,10 +64,15 @@ try {
   {
     const page = await openRun()
     await page.clock.runFor(20_000)
-    await assertHud(page, 1, '20s', 1)
-    await page.clock.runFor(20_000)
-    await assertHud(page, 1, '20s', 2)
-    await page.clock.runFor(20_000)
+    await waitForHud(page, 1, '20s', 1)
+    await page.clock.runFor(1_000)
+    await waitForHud(page, 1, '19s', 1)
+    await page.clock.runFor(19_000)
+    await waitForHud(page, 1, '20s', 2)
+    await page.clock.runFor(1_000)
+    await waitForHud(page, 1, '19s', 2)
+    await page.clock.runFor(19_000)
+    await page.getByRole('heading', { name: 'APPLICATION REJECTED', exact: true }).waitFor()
     assert.match(await page.locator('.result').innerText(), /Strikes\s+3\/3/)
     await page.getByRole('button', { name: 'Try again', exact: true }).click()
     await assertHud(page, 1, '20s', 0)
@@ -69,10 +84,10 @@ try {
     const page = await openRun(round)
     await page.clock.runFor(durationFor(round) * 1000)
     if (round <= 6) {
-      await assertHud(page, round, `${durationFor(round)}s`, 1)
+      await waitForHud(page, round, `${durationFor(round)}s`, 1)
     } else {
       const nextRound = round + 1
-      await assertHud(page, nextRound, nextRound === 10 ? 'final' : `${durationFor(nextRound)}s`, 1)
+      await waitForHud(page, nextRound, nextRound === 10 ? 'final' : `${durationFor(nextRound)}s`, 1)
     }
     await closePage(page)
   }
@@ -81,10 +96,10 @@ try {
   {
     const page = await openRun(1)
     for (let second = 0; second < 19; second += 1) await page.clock.runFor(1_000)
-    await assertHud(page, 1, '1s', 0)
+    await waitForHud(page, 1, '1s', 0)
     await page.locator('.cell').nth(1).click()
     await page.getByRole('button', { name: 'Verify selection', exact: true }).click()
-    await assertHud(page, 1, '20s', 1)
+    await waitForHud(page, 1, '20s', 1)
     assert.equal(await page.locator('.cell').nth(1).getAttribute('aria-pressed'), 'true', 'retry retains puzzle selection')
     await page.locator('.cell').nth(1).click()
     for (const index of [0, 4, 7]) await page.locator('.cell').nth(index).click()

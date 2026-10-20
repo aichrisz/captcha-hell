@@ -6,6 +6,7 @@ import { humanityLabel, humanityScore } from './game/humanity'
 import { filesForStage, popupsForRound, webcamLine, type PopupEvent } from './game/intrusions'
 import { pickFlavor } from './game/flavor'
 import { buildShareText } from './game/share'
+import { readBestRecord, readEndingIds, writeEndingIds } from './game/storage'
 import type { CheckboxData } from './game/puzzles/checkbox'
 import { initCheckbox, nextCheckboxState } from './game/puzzles/checkbox'
 import type { GridData } from './game/puzzles/grid'
@@ -18,7 +19,7 @@ import type { SliderData } from './game/puzzles/slider'
 import { attemptSlider } from './game/puzzles/slider'
 import type { WordChoiceData } from './game/puzzles/wordChoice'
 import { evalChoice } from './game/puzzles/wordChoice'
-import type { EndingId, GameState, RoundResult } from './game/types'
+import type { EndingId, GameState, LastVerdict, RoundResult, VerdictMeasures } from './game/types'
 
 function formatTime(sec: number) {
   return `${Math.max(0, Math.ceil(sec))}s`
@@ -39,18 +40,32 @@ function humanityOf(state: GameState) {
   })
 }
 
-function readBest() {
-  try {
-    const raw = localStorage.getItem('captcha-hell.best.v1')
-    return raw ? JSON.parse(raw) as { score: number; ending: EndingId; at: string } : null
-  } catch {
-    return null
-  }
+function verdictChanges(delta: VerdictMeasures) {
+  return (['score', 'strikes', 'suspicion'] as const)
+    .filter((key) => delta[key] !== 0)
+    .map((key) => `${key[0].toUpperCase()}${key.slice(1)} ${delta[key] > 0 ? '+' : ''}${delta[key]}`)
+}
+
+function receiptAnnouncement(verdict: LastVerdict) {
+  const changes = verdictChanges(verdict.delta)
+  return `Receipt ${verdict.sequence}: ${verdict.outcome}. Round ${verdict.round}.${changes.length ? ` ${changes.join('. ')}.` : ''}`
+}
+
+function VerdictReceipt({ verdict }: { verdict?: LastVerdict }) {
+  if (!verdict) return <p className="verdict-receipt empty">Awaiting first verification result.</p>
+  const changes = verdictChanges(verdict.delta)
+  return (
+    <div className="verdict-receipt" aria-label={`Receipt ${verdict.sequence}`}>
+      <strong>Receipt {verdict.sequence}</strong>
+      <span>Round {verdict.round}: {verdict.outcome}</span>
+      {changes.length > 0 && <span>{changes.join('; ')}</span>}
+    </div>
+  )
 }
 
 function writeBest(state: GameState) {
-  if (!state.ending) return readBest()
-  const best = readBest()
+  if (!state.ending) return readBestRecord()
+  const best = readBestRecord()
   if (!best || state.score > best.score) {
     const next = { score: state.score, ending: state.ending, at: new Date().toISOString() }
     try { localStorage.setItem('captcha-hell.best.v1', JSON.stringify(next)) } catch { /* no storage */ }
@@ -85,14 +100,16 @@ function useBeep(soundOn: boolean) {
 
 export default function App() {
   const [state, dispatch] = useReducer(reducer, initialState)
-  const [best, setBest] = useState(readBest)
+  const [best, setBest] = useState(readBestRecord)
+  const [endings, setEndings] = useState(readEndingIds)
+  const endingsRef = useRef(endings)
+  const [collectionNotSaved, setCollectionNotSaved] = useState(false)
   const [manualReduceMotion, setManualReduceMotion] = useState(false)
   const [osReduceMotion, setOsReduceMotion] = useState(() => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false)
   const reduceMotion = manualReduceMotion || osReduceMotion
   const [timeLeft, setTimeLeft] = useState(20)
   const [timerIdentity, setTimerIdentity] = useState('')
   const [handledExpiry, setHandledExpiry] = useState('')
-  const [message, setMessage] = useState('Awaiting first verification.')
   const beep = useBeep(state.soundOn)
   const debug = useMemo(() => new URLSearchParams(location.search).has('debug'), [])
   const round = state.phase === 'play' ? getRound(state.round) : null
@@ -121,13 +138,20 @@ export default function App() {
     setTimeLeft(round.timerSec || 99)
     setTimerIdentity(key)
     setHandledExpiry('')
-    setMessage(`Round ${round.id}: ${round.type}`)
   }, [round?.id, state.attempt])
 
   useEffect(() => {
     if (state.phase !== 'ending') return
     setBest(writeBest(state))
   }, [state])
+
+  useEffect(() => {
+    if (state.phase !== 'ending' || !state.ending || debug || endingsRef.current.includes(state.ending)) return
+    const next = [...endingsRef.current, state.ending]
+    endingsRef.current = next
+    setEndings(next)
+    setCollectionNotSaved(!writeEndingIds(next))
+  }, [state.phase, state.ending, debug])
 
   useEffect(() => {
     if (state.phase !== 'play' || !round || round.timerSec === 0 || timeLeft <= 0) return
@@ -146,7 +170,6 @@ export default function App() {
     setHandledExpiry(key)
     dispatch({ type: 'TIMER_EXPIRED' })
     beep('bad')
-    setMessage('Time expired. The widget noticed.')
   }, [state.phase, state.attempt, round?.id, round?.timerSec, timeLeft, timerIdentity, handledExpiry, beep])
 
   // Fake popup theater: schedule this round's popups once per run. Copy only,
@@ -217,19 +240,23 @@ export default function App() {
   const submit = (result: RoundResult) => {
     dispatch({ type: 'SUBMIT_ROUND', result })
     beep(result.passed ? 'ok' : 'bad')
-    setMessage(result.passed ? 'Accepted. Suspiciously accepted.' : 'Rejected. Try to be more human.')
   }
 
+  const announcement = state.lastVerdict ? receiptAnnouncement(state.lastVerdict) : ''
+  const receiptOwner = <p className="receipt-announcer" data-receipt-announcer aria-live="polite" aria-atomic="true">{announcement}</p>
+
   if (state.phase === 'start') {
-    return <StartScreen best={best} state={state} dispatch={dispatch} setReduceMotion={setManualReduceMotion} reduceMotion={manualReduceMotion} />
+    return <>{receiptOwner}<StartScreen best={best} state={state} dispatch={dispatch} setReduceMotion={setManualReduceMotion} manualReduceMotion={manualReduceMotion} osReduceMotion={osReduceMotion} effectiveReduceMotion={reduceMotion} endings={endings} collectionNotSaved={collectionNotSaved} /></>
   }
 
   if (state.phase === 'ending') {
     const ending = state.ending ?? 'rejected'
-    return <Ending state={state} best={best} dispatch={dispatch} ending={ending} reduceMotion={reduceMotion} />
+    return <>{receiptOwner}<Ending state={state} best={best} dispatch={dispatch} ending={ending} reduceMotion={reduceMotion} endings={endings} collectionNotSaved={collectionNotSaved} /></>
   }
 
   return (
+    <>
+    {receiptOwner}
     <main className={`app crt stage-${round?.stage ?? 1} ${reduceMotion ? 'reduce-motion' : ''}`}>
       <section className="shell">
         <Header state={state} humanity={humanity} timeLeft={timeLeft} roundTimer={round?.timerSec ?? 0} dispatch={dispatch} />
@@ -244,7 +271,6 @@ export default function App() {
                 aria-describedby="appeal-status"
                 onClick={() => {
                   dispatch({ type: 'APPEAL_VERDICT' })
-                  setMessage('Appeal accepted: 50 points spent; suspicion reduced by up to 20.')
                 }}
               >Appeal verdict</button>
               <p className="hint">Cost: 50 points. Removes up to 20 suspicion, clamped at zero.</p>
@@ -261,7 +287,7 @@ export default function App() {
               </p>
             </div>
           )}
-          <p className="message" aria-live="polite">{message}</p>
+          <VerdictReceipt verdict={state.lastVerdict} />
         </section>
         <aside className="terms">
           <h2>Verification notes</h2>
@@ -299,10 +325,11 @@ export default function App() {
       )}
       {debug && <Debug dispatch={dispatch} state={state} />}
     </main>
+    </>
   )
 }
 
-function StartScreen({ best, state, dispatch, reduceMotion, setReduceMotion }: { best: ReturnType<typeof readBest>; state: GameState; dispatch: React.Dispatch<any>; reduceMotion: boolean; setReduceMotion: (v: boolean) => void }) {
+function StartScreen({ best, state, dispatch, manualReduceMotion, osReduceMotion, effectiveReduceMotion, setReduceMotion, endings, collectionNotSaved }: { best: ReturnType<typeof readBestRecord>; state: GameState; dispatch: React.Dispatch<any>; manualReduceMotion: boolean; osReduceMotion: boolean; effectiveReduceMotion: boolean; setReduceMotion: (v: boolean) => void; endings: EndingId[]; collectionNotSaved: boolean }) {
   return (
     <main className="start">
       <section className="start-card">
@@ -312,11 +339,25 @@ function StartScreen({ best, state, dispatch, reduceMotion, setReduceMotion }: {
         <div className="actions">
           <button className="primary" onClick={() => dispatch({ type: 'START_RUN' })}>Begin verification</button>
           <button onClick={() => dispatch({ type: 'SOUND_TOGGLE' })}>Sound {state.soundOn ? 'on' : 'off'}</button>
-          <button onClick={() => setReduceMotion(!reduceMotion)}>Motion {reduceMotion ? 'reduced' : 'full'}</button>
+          <button onClick={() => setReduceMotion(!manualReduceMotion)}>Manual motion {manualReduceMotion ? 'reduced' : 'full'}</button>
         </div>
+        <p className="hint motion-status">Effective motion: {effectiveReduceMotion ? 'reduced' : 'full'}{osReduceMotion ? ' by device preference' : ''}.</p>
         <p className="best">Best: {best ? `${best.score} points, ${ENDING_COPY[best.ending].title}` : 'no previous human detected'}</p>
+        <EndingDossier endings={endings} notSaved={collectionNotSaved} />
       </section>
     </main>
+  )
+}
+
+function EndingDossier({ endings, notSaved }: { endings: EndingId[]; notSaved: boolean }) {
+  const unlocked = new Set(endings)
+  return (
+    <details className="ending-dossier">
+      <summary>Ending dossier: {endings.length} of 6 unlocked</summary>
+      <ul>{(Object.keys(ENDING_COPY) as EndingId[]).map((ending) => <li key={ending}>{unlocked.has(ending) ? ENDING_COPY[ending].title : 'Sealed verdict'}</li>)}</ul>
+      <p className="hint">Saved only in this browser.</p>
+      {notSaved && <p className="collection-status" role="status">New discoveries are session-only. Previously saved endings remain; this collection is not fully saved.</p>}
+    </details>
   )
 }
 
@@ -340,24 +381,25 @@ function Meter({ label, value, max, danger, plain, blue }: { label: string; valu
 }
 
 function Puzzle({ round, state, timeLeft, submit, dispatch, reduceMotion }: { round: ReturnType<typeof getRound>; state: GameState; timeLeft: number; submit: (r: RoundResult) => void; dispatch: React.Dispatch<any>; reduceMotion: boolean }) {
-  if (round.type === 'grid') return <GridPuzzle data={round.data as GridData} timeLeft={timeLeft} submit={submit} />
+  if (round.type === 'grid') return <GridPuzzle roundId={round.id} data={round.data as GridData} timeLeft={timeLeft} submit={submit} />
   if (round.type === 'checkbox') return <CheckboxPuzzle data={round.data as CheckboxData} timeLeft={timeLeft} submit={submit} reduceMotion={reduceMotion} />
   if (round.type === 'timedClick') return <TimedClick data={round.data as TimedClickData} attempt={state.attempt} timeLeft={timeLeft} submit={submit} />
-  if (round.type === 'slider') return <SliderPuzzle data={round.data as SliderData} timeLeft={timeLeft} submit={submit} />
+  if (round.type === 'slider') return <SliderPuzzle data={round.data as SliderData} attempt={state.attempt} timeLeft={timeLeft} submit={submit} />
   if (round.type === 'wordChoice') return <WordPuzzle data={round.data as WordChoiceData} timeLeft={timeLeft} submit={submit} />
   if (round.type === 'recall') return <RecallPuzzle data={round.data as RecallData} state={state} timeLeft={timeLeft} submit={submit} />
-  return <FinalPuzzle data={round.data as FinalData} dispatch={dispatch} reduceMotion={reduceMotion} />
+  return <FinalPuzzle data={round.data as FinalData} state={state} dispatch={dispatch} reduceMotion={reduceMotion} />
 }
 
-function GridPuzzle({ data, timeLeft, submit }: { data: GridData; timeLeft: number; submit: (r: RoundResult) => void }) {
+function GridPuzzle({ roundId, data, timeLeft, submit }: { roundId: number; data: GridData; timeLeft: number; submit: (r: RoundResult) => void }) {
   const [selected, setSelected] = useState<number[]>([])
   const toggle = (i: number) => setSelected((s) => s.includes(i) ? s.filter((x) => x !== i) : [...s, i])
-  return <div><h2>{data.prompt}</h2><div className="grid">{data.cells.map((cell, i) => <button className={selected.includes(i) ? 'cell active' : 'cell'} key={i} onClick={() => toggle(i)} aria-pressed={selected.includes(i)}><span>{cell.icon}</span><small>{cell.label ?? `tile ${i + 1}`}</small></button>)}</div><button className="primary wide" onClick={() => { const r = validateGrid(selected, data.correct, data.ambiguous); submit({ ...r, timeLeftSec: timeLeft, strikeSource: 'wrongSubmit' }) }}>Verify selection</button>{data.failCopy && <p className="hint">{data.failCopy}</p>}</div>
+  return <div><h2>{data.prompt}</h2>{roundId === 3 && <p className="hint interpretation-cue">Your interpretation will be kept on file.</p>}<div className="grid">{data.cells.map((cell, i) => <button className={selected.includes(i) ? 'cell active' : 'cell'} key={i} onClick={() => toggle(i)} aria-pressed={selected.includes(i)}><span>{cell.icon}</span><small>{cell.label ?? `tile ${i + 1}`}</small></button>)}</div><button className="primary wide" onClick={() => { const r = validateGrid(selected, data.correct, data.ambiguous); submit({ ...r, timeLeftSec: timeLeft, strikeSource: 'wrongSubmit' }) }}>Verify selection</button>{data.failCopy && <p className="hint">{data.failCopy}</p>}</div>
 }
 
 function CheckboxPuzzle({ data, timeLeft, submit, reduceMotion }: { data: CheckboxData; timeLeft: number; submit: (r: RoundResult) => void; reduceMotion: boolean }) {
   const [box, setBox] = useState(initCheckbox())
-  return <div><h2>{data.prompt}</h2><button className="checkbox" style={{ transform: `translate(${box.offsetX}px, ${box.offsetY}px)`, '--dodge-x': `${box.offsetX}px`, '--dodge-y': `${box.offsetY}px` } as React.CSSProperties} onClick={() => { const step = nextCheckboxState(box, data, reduceMotion); setBox(step.state); if (step.event === 'checked') submit({ passed: true, timeLeftSec: timeLeft }); }}><span>{box.checked ? '✓' : box.frozen ? '?' : ''}</span>I am not a robot</button>{box.frozen && <p className="hint">The checkbox has frozen. It wants a statement, not a click.</p>}</div>
+  const [motionNotice, setMotionNotice] = useState('')
+  return <div><h2>{data.prompt}</h2><button className="checkbox" style={{ transform: `translate(${box.offsetX}px, ${box.offsetY}px)`, '--dodge-x': `${box.offsetX}px`, '--dodge-y': `${box.offsetY}px` } as React.CSSProperties} onClick={() => { const step = nextCheckboxState(box, data, reduceMotion); setBox(step.state); setMotionNotice(reduceMotion && step.event === 'dodge' ? 'The checkbox stayed still. Try again.' : ''); if (step.event === 'checked') submit({ passed: true, timeLeftSec: timeLeft }); }}><span>{box.checked ? '✓' : box.frozen ? '?' : ''}</span>I am not a robot</button>{motionNotice && <p className="hint" role="status">{motionNotice}</p>}{box.frozen && <p className="hint">The checkbox has frozen. It wants a statement, not a click.</p>}</div>
 }
 
 function TimedClick({ data, attempt, timeLeft, submit }: { data: TimedClickData; attempt: number; timeLeft: number; submit: (r: RoundResult) => void }) {
@@ -408,10 +450,17 @@ function TimedClick({ data, attempt, timeLeft, submit }: { data: TimedClickData;
   </div>
 }
 
-function SliderPuzzle({ data, timeLeft, submit }: { data: SliderData; timeLeft: number; submit: (r: RoundResult) => void }) {
+function SliderPuzzle({ data, attempt, timeLeft, submit }: { data: SliderData; attempt: number; timeLeft: number; submit: (r: RoundResult) => void }) {
   const [value, setValue] = useState(50)
   const [tol, setTol] = useState(data.tolerance)
   const [misses, setMisses] = useState(0)
+  const previousAttempt = useRef(attempt)
+  useEffect(() => {
+    if (previousAttempt.current === attempt) return
+    previousAttempt.current = attempt
+    setMisses(0)
+    setTol(data.tolerance)
+  }, [attempt, data.tolerance])
   return <div><h2>{data.prompt}</h2><div className="slider-wrap"><span style={{ left: `${data.target}%`, width: `${tol * 2}%` }} /><input aria-label="alignment slider" type="range" min="0" max="100" value={value} onChange={(e) => setValue(Number(e.target.value))} /></div><button className="primary wide" onClick={() => { const r = attemptSlider(value, data, tol, misses); if (r.passed) submit({ passed: true, timeLeftSec: timeLeft }); else if (r.strike) submit({ passed: false, timeLeftSec: timeLeft, strikeSource: 'wrongSubmit' }); else { setTol(r.tolerance); setMisses(r.misses); } }}>Lock alignment</button><p className="hint">Misses: {misses}/{data.maxMisses}</p></div>
 }
 
@@ -420,18 +469,30 @@ function WordPuzzle({ data, timeLeft, submit }: { data: WordChoiceData; timeLeft
 }
 
 function RecallPuzzle({ data, state, timeLeft, submit }: { data: RecallData; state: GameState; timeLeft: number; submit: (r: RoundResult) => void }) {
+  if (state.ambiguousChoice) {
+    return <div><h2>In round 3, how did you interpret the poster?</h2><div className="choices semantic-choices"><button onClick={() => submit({ passed: state.ambiguousChoice === 'bicycle', timeLeftSec: timeLeft, strikeSource: 'wrongSubmit' })}>I counted the poster as a bicycle</button><button onClick={() => submit({ passed: state.ambiguousChoice === 'poster', timeLeftSec: timeLeft, strikeSource: 'wrongSubmit' })}>I treated it as a poster</button></div></div>
+  }
   const actual = state.history.find((h) => h.round === data.sourceRound)?.count ?? data.fallbackCount
   const options = buildRecallOptions(actual, state.score + state.round)
   return <div><h2>{data.prompt}</h2><div className="choices number-choices">{options.map((n) => <button key={n} onClick={() => submit({ passed: evalRecall(n, actual), timeLeftSec: timeLeft, strikeSource: 'wrongSubmit' })}>{n}</button>)}</div></div>
 }
 
-function FinalPuzzle({ data, dispatch, reduceMotion }: { data: FinalData; dispatch: React.Dispatch<any>; reduceMotion: boolean }) {
+function FinalPuzzle({ data, state, dispatch, reduceMotion }: { data: FinalData; state: GameState; dispatch: React.Dispatch<any>; reduceMotion: boolean }) {
   const [box, setBox] = useState(initCheckbox())
-  const frozen = box.frozen
-  return <div><h2>{data.prompt}</h2><button className="checkbox final-box" style={{ transform: `translate(${box.offsetX}px, ${box.offsetY}px)`, '--dodge-x': `${box.offsetX}px`, '--dodge-y': `${box.offsetY}px` } as React.CSSProperties} onClick={() => setBox((s) => nextCheckboxState(s, data.checkbox, reduceMotion).state)}><span>{box.frozen ? '?' : ''}</span>{data.checkbox.prompt}</button>{frozen && <div className="choices">{data.word.options.map((opt, i) => <button key={opt} onClick={() => dispatch({ type: 'FINAL_CHOICE', choice: data.word.branch?.[i] ?? 'trying' })}>{opt}</button>)}</div>}</div>
+  const [motionNotice, setMotionNotice] = useState('')
+  return <div>
+    <h2>{data.prompt}</h2>
+    <button className="checkbox final-box" style={{ transform: `translate(${box.offsetX}px, ${box.offsetY}px)`, '--dodge-x': `${box.offsetX}px`, '--dodge-y': `${box.offsetY}px` } as React.CSSProperties} onClick={() => { const step = nextCheckboxState(box, data.checkbox, reduceMotion); setBox(step.state); setMotionNotice(reduceMotion && step.event === 'dodge' ? 'The checkbox stayed still. Try again.' : ''); if (step.event === 'freeze') dispatch({ type: 'FINAL_READY' }); }}><span>{state.finalReady ? '?' : ''}</span>{data.checkbox.prompt}</button>
+    {motionNotice && <p className="hint" role="status">{motionNotice}</p>}
+    {state.finalReady && <>
+      <p className="hint final-frozen">The checkbox has frozen. It wants a statement, not a click.</p>
+      <div className="choices">{data.word.options.map((opt, i) => <button key={opt} onClick={() => dispatch({ type: 'FINAL_CHOICE', choice: data.word.branch?.[i] ?? 'trying' })}>{opt}</button>)}</div>
+      <div className="final-choice-actions"><p id="refusal-warning">Sets suspicion to 100 and ends this run as ACCOUNT FLAGGED.</p><button className="refusal-choice" aria-describedby="refusal-warning" onClick={() => dispatch({ type: 'REFUSE_VERIFICATION' })}>Refuse verification</button></div>
+    </>}
+  </div>
 }
 
-function Ending({ state, best, dispatch, ending, reduceMotion }: { state: GameState; best: ReturnType<typeof readBest>; dispatch: React.Dispatch<any>; ending: EndingId; reduceMotion: boolean }) {
+function Ending({ state, best, dispatch, ending, reduceMotion, endings, collectionNotSaved }: { state: GameState; best: ReturnType<typeof readBestRecord>; dispatch: React.Dispatch<any>; ending: EndingId; reduceMotion: boolean; endings: EndingId[]; collectionNotSaved: boolean }) {
   const copy = ENDING_COPY[ending]
   const humanity = humanityOf(state)
   const [copyNote, setCopyNote] = useState('')
@@ -467,6 +528,8 @@ function Ending({ state, best, dispatch, ending, reduceMotion }: { state: GameSt
           <div><dt>Best</dt><dd>{best?.score ?? state.score}</dd></div>
         </dl>
         <p className="verdict">Reading: {humanityLabel(humanity)}</p>
+        <VerdictReceipt verdict={state.lastVerdict} />
+        <EndingDossier endings={endings} notSaved={collectionNotSaved} />
         <div className="actions">
           <button className="primary" onClick={() => dispatch({ type: 'START_RUN' })}>Try again</button>
           <button onClick={copyResult}>Copy result</button>

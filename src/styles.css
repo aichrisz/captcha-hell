@@ -45,6 +45,16 @@ h1 { margin: 0; font-size: clamp(3.6rem, 11vw, 8.4rem); letter-spacing: -.08em; 
 .widget h1 { font-size: clamp(3.2rem, 8vw, 6.6rem); }
 .widget h2 { font-size: clamp(1.45rem, 3vw, 2.4rem); line-height: 1.02; max-width: 17ch; margin: 1rem 0; }
 .message, .hint { color: var(--muted); font-weight: 650; }
+.receipt-announcer { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.verdict-receipt { display: grid; gap: .15rem; margin: .75rem 0; padding: .55rem .7rem; border: 1px solid var(--line); border-left: 4px solid var(--blue); border-radius: 10px; color: var(--muted); font-size: .85rem; line-height: 1.25; overflow-wrap: anywhere; }
+.verdict-receipt strong { color: var(--blue); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; }
+.verdict-receipt.empty { font-weight: 650; }
+.ending-dossier { margin-top: 1rem; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,250,240,.6); }
+.ending-dossier summary { min-height: 44px; padding: .65rem .8rem; cursor: pointer; font-weight: 800; overflow-wrap: anywhere; }
+.ending-dossier ul { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .35rem .8rem; margin: .35rem 0; padding: 0 1rem 0 2rem; }
+.ending-dossier li { overflow-wrap: anywhere; }
+.ending-dossier > .hint, .collection-status { margin: .5rem .8rem; font-size: .82rem; line-height: 1.35; overflow-wrap: anywhere; }
+.collection-status { color: var(--red); font-weight: 700; }
 .terms { border: 1px solid var(--line); border-radius: 24px; background: rgba(255,250,240,.76); padding: 1rem; position: sticky; top: 1rem; }
 .terms h2 { margin-top: 0; }
 .grid { display: grid; grid-template-columns: repeat(3, minmax(74px, 1fr)); gap: .65rem; max-width: 560px; margin: 1rem 0; }
@@ -63,6 +73,11 @@ h1 { margin: 0; font-size: clamp(3.6rem, 11vw, 8.4rem); letter-spacing: -.08em; 
 .slider-wrap input { width: 100%; min-height: 44px; }
 .choices { display: grid; gap: .7rem; max-width: 640px; margin: 1rem 0; }
 .choices button { text-align: left; }
+.semantic-choices { margin-top: .6rem; }
+.interpretation-cue, .motion-status { margin: .45rem 0; }
+.final-choice-actions { display: grid; justify-items: start; gap: .45rem; max-width: 640px; margin: .75rem 0; padding: .65rem .75rem; border: 1px solid var(--line); border-radius: 12px; background: rgba(23,20,15,.025); }
+.final-choice-actions p { margin: 0; color: var(--muted); font-weight: 650; line-height: 1.35; overflow-wrap: anywhere; }
+.refusal-choice { color: var(--red); border-color: rgba(181,65,46,.5); background: transparent; }
 .number-choices { grid-template-columns: repeat(4, 1fr); }
 .result { display: grid; grid-template-columns: repeat(5, 1fr); gap: .7rem; margin: 1.6rem 0; }
 .result div { border: 1px solid var(--line); border-radius: 16px; padding: .8rem; }
@@ -145,6 +160,7 @@ h1 { margin: 0; font-size: clamp(3.6rem, 11vw, 8.4rem); letter-spacing: -.08em; 
     border-radius: 14px;
     background: rgba(243, 238, 225, .98);
   }
+  .app:has(.final-choice-actions:focus-within) .hud { position: static; }
   .stat { min-width: 0; min-height: 38px; padding: .25rem .35rem; border-radius: 10px; }
   .stat span { font-size: .62rem; line-height: 1.1; letter-spacing: .04em; overflow-wrap: anywhere; }
   .stat strong { font-size: 1rem; line-height: 1; overflow-wrap: anywhere; }
@@ -158,6 +174,8 @@ h1 { margin: 0; font-size: clamp(3.6rem, 11vw, 8.4rem); letter-spacing: -.08em; 
   .cell span { font-size: clamp(1.5rem, 7vw, 2rem); line-height: 1; }
   .cell small { max-width: 100%; font-size: .68rem; line-height: 1.1; overflow-wrap: anywhere; }
   .number-choices, .result { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .final-choice-actions { margin: .45rem 0; padding: .45rem .55rem; }
+  .refusal-choice { min-height: 44px; }
   .checkbox { width: 100%; max-width: 100%; min-width: 0; min-height: 44px; margin: .55rem 0; padding: .3rem .45rem; gap: .45rem; text-align: left; overflow-wrap: anywhere; transform: translate(clamp(-8px, var(--dodge-x, 0px), 8px), clamp(-8px, var(--dodge-y, 0px), 8px)) !important; }
   .checkbox { width: calc(100% - 16px); margin-inline: 8px; }
   .checkbox span { flex: 0 0 34px; }
@@ -166,6 +184,9 @@ h1 { margin: 0; font-size: clamp(3.6rem, 11vw, 8.4rem); letter-spacing: -.08em; 
   .timed-click-status { display: flex; min-height: 5.25em; align-items: center; margin: .35rem 0; line-height: 1.25; }
   .appeal { display: grid; justify-items: start; gap: .1rem; margin: .55rem 0 0; }
   .appeal .hint { margin: .1rem 0 0; font-size: .76rem; line-height: 1.2; }
+  .verdict-receipt { margin: .35rem 0; padding: .35rem .5rem; font-size: .78rem; }
+  .ending-dossier summary { padding: .5rem .6rem; }
+  .ending-dossier ul { grid-template-columns: minmax(0, 1fr); }
   .ending .start-card { min-width: 0; max-width: 100%; padding: 1rem; }
   .ending h1 { max-width: 100%; font-size: clamp(1.8rem, 9vw, 3rem); line-height: .98; letter-spacing: -.05em; overflow-wrap: anywhere; }
   .ending .result > div { min-width: 0; padding: .55rem; }
@@ -241,4 +262,9 @@ h1 { margin: 0; font-size: clamp(3.6rem, 11vw, 8.4rem); letter-spacing: -.08em; 
   .popup { flex: 0 0 auto; transform: none; }
   .ending .start-card { min-width: 0; max-width: 100%; }
   .ending h1 { max-width: 100%; font-size: clamp(1.7rem, 5vw, 2.5rem); line-height: 1; overflow-wrap: anywhere; }
+}
+
+@media (max-width: 360px) {
+  .ending .result { grid-template-columns: minmax(0, 1fr); }
+  .ending .result dt, .ending .result dd, .ending .micro { overflow-wrap: anywhere; }
 }

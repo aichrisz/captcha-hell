@@ -25,6 +25,24 @@ export type AmbiguousChoice = 'bicycle' | 'poster'
 
 export type FinalChoice = 'human' | 'trying' | 'matter'
 
+export type VerdictAction = 'SUBMIT_ROUND' | 'TIMER_EXPIRED' | 'APPEAL_VERDICT' | 'FINAL_CHOICE' | 'REFUSE_VERIFICATION'
+
+export interface VerdictMeasures {
+  score: number
+  strikes: number
+  suspicion: number
+}
+
+export interface LastVerdict {
+  sequence: number
+  action: VerdictAction
+  round: number
+  outcome: string
+  before: VerdictMeasures
+  after: VerdictMeasures
+  delta: VerdictMeasures
+}
+
 export interface RoundDef {
   id: number            // 1-10
   stage: 1 | 2 | 3 | 4
@@ -58,6 +76,8 @@ export interface GameState {
   soundOn: boolean
   attempt: number       // attempts spent on current round, 0 = first try
   appealUsed: boolean
+  finalReady: boolean
+  lastVerdict?: LastVerdict
   ending?: EndingId
   ambiguousChoice?: AmbiguousChoice
   finalChoice?: FinalChoice
@@ -70,6 +90,8 @@ export type Action =
   | { type: 'SUSPICION'; event: SuspicionEvent }
   | { type: 'TIMER_EXPIRED' }
   | { type: 'FINAL_CHOICE'; choice: FinalChoice }
+  | { type: 'FINAL_READY' }
+  | { type: 'REFUSE_VERIFICATION' }
   | { type: 'END_RUN'; ending: EndingId }
   | { type: 'RESTART' }
   | { type: 'SOUND_TOGGLE' }

@@ -281,7 +281,7 @@ async function playPerfectRun(page) {
   await dismissPopups(page)
   await page.getByRole('button', { name: 'Cry at a song from 2009', exact: true }).click()
   await dismissPopups(page)
-  await page.getByRole('button', { name: '3', exact: true }).click()
+  await page.getByRole('button', { name: 'I treated it as a poster', exact: true }).click()
   await dismissPopups(page)
   for (let i = 0; i < 9; i += 1) await page.locator('.cell').nth(i).click()
   await dismissPopups(page)

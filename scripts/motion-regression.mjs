@@ -25,8 +25,12 @@ async function openRun({ mode = 'full', round = 2, width = 390, mobile = false }
   page.on('pageerror', (error) => pageErrors.push(error.message))
   await page.goto(debugURL())
   if (mode === 'manual' || mode === 'both') {
-    await page.getByRole('button', { name: 'Motion full', exact: true }).click()
+    await page.getByRole('button', { name: 'Manual motion full', exact: true }).click()
   }
+  const manualLabel = mode === 'manual' || mode === 'both' ? 'Manual motion reduced' : 'Manual motion full'
+  const effectiveLabel = mode === 'full' ? 'Effective motion: full.' : `Effective motion: reduced${mode === 'os' || mode === 'both' ? ' by device preference' : ''}.`
+  assert.equal(await page.getByRole('button', { name: manualLabel, exact: true }).count(), 1, `${mode}: manual setting is stated separately`)
+  assert.equal(await page.getByText(effectiveLabel, { exact: true }).count(), 1, `${mode}: effective setting identifies the active source`)
   await page.getByRole('button', { name: 'Begin verification', exact: true }).click()
   for (let current = 1; current < round; current += 1) {
     await page.getByRole('button', { name: 'Next round', exact: true }).click()
@@ -101,6 +105,7 @@ try {
     const checkbox = page.locator('.checkbox').first()
     await checkbox.click()
     await assertTransform(checkbox, reduced ? 'translate(0px, 0px)' : 'translate(110px, 34px)', `round 2 ${mode}, activation 1`)
+    if (reduced) assert.equal(await page.getByText('The checkbox stayed still. Try again.', { exact: true }).count(), 1, `round 2 ${mode}: still checkbox rejection is acknowledged in text`)
     await assertCheckboxContained(checkbox, `round 2 ${mode}, activation 1`)
     if (reduced) {
       await checkbox.click()
@@ -123,6 +128,7 @@ try {
     const activations = reduced ? 2 : 3
     for (let activation = 1; activation <= activations; activation += 1) {
       await checkbox.click()
+      if (reduced && activation === 1) assert.equal(await page.getByText('The checkbox stayed still. Try again.', { exact: true }).count(), 1, `round 10 ${mode}: still checkbox rejection is acknowledged in text`)
       const expected = reduced || activation === activations ? 'translate(0px, 0px)' : activation === 1 ? 'translate(110px, 34px)' : 'translate(-96px, 58px)'
       await assertTransform(checkbox, expected, `round 10 ${mode}, activation ${activation}`)
       await assertCheckboxContained(checkbox, `round 10 ${mode}, activation ${activation}`)
@@ -184,10 +190,11 @@ try {
     pages.add(page)
     page.on('pageerror', (error) => pageErrors.push(error.message))
     await page.goto(debugURL())
-    await page.getByRole('button', { name: 'Motion full', exact: true }).click()
+    await page.getByRole('button', { name: 'Manual motion full', exact: true }).click()
     await page.emulateMedia({ reducedMotion: 'reduce' })
     await page.emulateMedia({ reducedMotion: 'no-preference' })
-    assert.equal(await page.getByRole('button', { name: 'Motion reduced', exact: true }).count(), 1, 'OS changes preserve the manual setting')
+    assert.equal(await page.getByRole('button', { name: 'Manual motion reduced', exact: true }).count(), 1, 'OS changes preserve the manual setting')
+    assert.equal(await page.getByText('Effective motion: reduced.', { exact: true }).count(), 1, 'manual reduction remains effective after OS preference clears')
     await page.getByRole('button', { name: 'Begin verification', exact: true }).click()
     await page.getByRole('button', { name: 'Next round', exact: true }).click()
     const checkbox = page.locator('.checkbox').first()

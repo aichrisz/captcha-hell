@@ -1,9 +1,9 @@
-import type { Action, GameState, RoundResult } from './types'
+import type { Action, GameState, LastVerdict, RoundResult, VerdictAction, VerdictMeasures } from './types'
 import { getRound } from './rounds'
 import { FINAL_BONUS, scorePass } from './scoring'
 import { applyStrike } from './strikes'
 import { applySuspicion } from './suspicion'
-import { selectEnding } from './endings'
+import { ENDING_COPY, selectEnding } from './endings'
 import { recordAnswer } from './history'
 
 export const initialState: GameState = {
@@ -16,6 +16,45 @@ export const initialState: GameState = {
   soundOn: true,
   attempt: 0,
   appealUsed: false,
+  finalReady: false,
+}
+
+function measures(state: GameState): VerdictMeasures {
+  return { score: state.score, strikes: state.strikes, suspicion: state.suspicion }
+}
+
+function verdictOutcome(before: GameState, after: GameState, action: VerdictAction, passed?: boolean): string {
+  if (action === 'APPEAL_VERDICT') return 'Appeal accepted'
+  if (action === 'FINAL_CHOICE') return after.ending ? `Final classification: ${ENDING_COPY[after.ending].title}` : 'Final choice recorded'
+  if (action === 'REFUSE_VERIFICATION') return 'Verification refused; account flagged'
+  if (after.phase === 'ending') {
+    if (action === 'TIMER_EXPIRED') return 'Time expired; run ended'
+    return passed ? 'Accepted; run ended' : 'Rejected; run ended'
+  }
+  if (action === 'SUBMIT_ROUND' && passed) return 'Accepted; next challenge opened'
+  if (after.round !== before.round) return action === 'TIMER_EXPIRED'
+    ? 'Time expired; advanced after failure'
+    : 'Rejected; advanced after failure'
+  return action === 'TIMER_EXPIRED' ? 'Time expired; retry available' : 'Rejected; retry available'
+}
+
+function recordVerdict(before: GameState, after: GameState, action: VerdictAction, passed?: boolean): GameState {
+  const beforeValues = measures(before)
+  const afterValues = measures(after)
+  const lastVerdict: LastVerdict = {
+    sequence: (before.lastVerdict?.sequence ?? 0) + 1,
+    action,
+    round: before.round,
+    outcome: verdictOutcome(before, after, action, passed),
+    before: beforeValues,
+    after: afterValues,
+    delta: {
+      score: afterValues.score - beforeValues.score,
+      strikes: afterValues.strikes - beforeValues.strikes,
+      suspicion: afterValues.suspicion - beforeValues.suspicion,
+    },
+  }
+  return { ...after, lastVerdict }
 }
 
 function endRun(state: GameState): GameState {
@@ -89,9 +128,10 @@ export function reducer(state: GameState, action: Action): GameState {
 
     case 'SUBMIT_ROUND': {
       if (state.phase !== 'play') return state
-      return action.result.passed
+      const next = action.result.passed
         ? passRound(state, action.result)
         : failRound(state, action.result)
+      return recordVerdict(state, next, action.type, action.result.passed)
     }
 
     case 'STRIKE': {
@@ -108,26 +148,39 @@ export function reducer(state: GameState, action: Action): GameState {
       return suspicion >= 100 ? endRun(next) : next
     }
 
-    case 'APPEAL_VERDICT':
+    case 'APPEAL_VERDICT': {
       if (state.phase !== 'play' || state.appealUsed || state.score < 50 || state.suspicion <= 0) return state
-      return { ...state, score: state.score - 50, suspicion: Math.max(0, state.suspicion - 20), appealUsed: true }
+      const next = { ...state, score: state.score - 50, suspicion: Math.max(0, state.suspicion - 20), appealUsed: true }
+      return recordVerdict(state, next, action.type)
+    }
 
     case 'TIMER_EXPIRED': {
       if (state.phase !== 'play') return state
       const def = getRound(state.round)
       const { strikes, lost } = applyStrike(state, 'timerExpiry')
       const next = { ...state, strikes }
-      if (lost) return endRun(next)
-      if (def.allowRetry) return { ...next, attempt: state.attempt + 1 }
-      const history = recordAnswer(state.history, { round: def.id, passed: false })
-      return advance({ ...next, history })
+      const resolved = lost
+        ? endRun(next)
+        : def.allowRetry
+          ? { ...next, attempt: state.attempt + 1 }
+          : advance({ ...next, history: recordAnswer(state.history, { round: def.id, passed: false }) })
+      return recordVerdict(state, resolved, action.type)
     }
 
+    case 'FINAL_READY':
+      if (state.phase !== 'play' || state.round !== 10 || state.finalReady) return state
+      return { ...state, finalReady: true }
+
     case 'FINAL_CHOICE': {
-      if (state.phase !== 'play') return state
+      if (state.phase !== 'play' || state.round !== 10 || !state.finalReady) return state
       const score = state.score + 100 + FINAL_BONUS[action.choice]
       const history = recordAnswer(state.history, { round: 10, passed: true })
-      return endRun({ ...state, score, history, finalChoice: action.choice })
+      return recordVerdict(state, endRun({ ...state, score, history, finalChoice: action.choice }), action.type)
+    }
+
+    case 'REFUSE_VERIFICATION': {
+      if (state.phase !== 'play' || state.round !== 10 || !state.finalReady) return state
+      return recordVerdict(state, endRun({ ...state, suspicion: 100 }), action.type)
     }
 
     case 'END_RUN':
