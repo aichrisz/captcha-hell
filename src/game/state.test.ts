@@ -129,6 +129,65 @@ describe('reducer', () => {
     expect(s.lastVerdict).toMatchObject({ action: 'TIMER_EXPIRED', round: 8, outcome: 'Time expired; advanced after failure' })
   })
 
+  it('leaves timer expiry on untimed round 6 and the existing final as exact no-ops', () => {
+    for (const state of [{ ...playing, round: 6 }, { ...playing, round: 10 }]) {
+      expect(reducer(state, { type: 'TIMER_EXPIRED' })).toBe(state)
+    }
+  })
+
+  it('normalizes untimed round 6 scoring to zero speed without changing timed siblings', () => {
+    const at6 = { ...playing, round: 6 }
+    const clean = reducer(at6, {
+      type: 'SUBMIT_ROUND', identity: { round: 6, attempt: 0 },
+      result: { passed: true, timeLeftSec: 0 },
+    })
+    const sentinel = reducer(at6, {
+      type: 'SUBMIT_ROUND', identity: { round: 6, attempt: 0 },
+      result: { passed: true, timeLeftSec: 99 },
+    })
+    expect(clean.score).toBe(150)
+    expect(sentinel.score).toBe(clean.score)
+    expect(clean.suspicion).toBe(0)
+    expect(sentinel.suspicion).toBe(0)
+    expect(clean.history).toEqual([{ round: 6, passed: true, count: undefined }])
+    expect(clean.round).toBe(7)
+
+    const failed = reducer(at6, {
+      type: 'SUBMIT_ROUND', identity: { round: 6, attempt: 0 },
+      result: { passed: false, timeLeftSec: 0, strikeSource: 'wrongSubmit' },
+    })
+    const retried = reducer(failed, {
+      type: 'SUBMIT_ROUND', identity: { round: 6, attempt: 1 },
+      result: { passed: true, timeLeftSec: 99 },
+    })
+    expect(retried.score).toBe(100)
+    expect(retried.strikes).toBe(1)
+    expect(retried.suspicion).toBe(10)
+
+    const timedFast = reducer({ ...playing, round: 5 }, { type: 'SUBMIT_ROUND', result: { passed: true, timeLeftSec: 15 } })
+    const timedSlow = reducer({ ...playing, round: 5 }, { type: 'SUBMIT_ROUND', result: { passed: true, timeLeftSec: 0 } })
+    expect(timedFast.score - timedSlow.score).toBe(15)
+    expect(timedFast.suspicion).toBe(0)
+    expect(timedSlow.suspicion).toBe(5)
+  })
+
+  it('admits one round and attempt owned filing for either pass or failure', () => {
+    const at6 = { ...playing, round: 6 }
+    const identity = { round: 6, attempt: 0 }
+    const pass = { type: 'SUBMIT_ROUND', identity, result: { passed: true, timeLeftSec: 0 } } as const
+    const passed = reducer(at6, pass)
+    expect(reducer(passed, pass)).toBe(passed)
+    expect(passed).toMatchObject({ round: 7, score: 150, strikes: 0, suspicion: 0 })
+    expect(passed.history).toEqual([{ round: 6, passed: true, count: undefined }])
+    expect(passed.lastVerdict).toMatchObject({ sequence: 1, action: 'SUBMIT_ROUND', round: 6, delta: { score: 150, strikes: 0, suspicion: 0 } })
+
+    const fail = { type: 'SUBMIT_ROUND', identity, result: { passed: false, timeLeftSec: 0, strikeSource: 'wrongSubmit' } } as const
+    const failed = reducer(at6, fail)
+    expect(reducer(failed, fail)).toBe(failed)
+    expect(failed).toMatchObject({ round: 6, attempt: 1, score: 0, strikes: 1, suspicion: 10, history: [] })
+    expect(failed.lastVerdict).toMatchObject({ sequence: 1, action: 'SUBMIT_ROUND', round: 6, delta: { score: 0, strikes: 1, suspicion: 10 } })
+  })
+
   it('distinguishes expiry from a wrong terminal submission', () => {
     const at9 = { ...playing, round: 9, strikes: 2 }
     const expired = reducer(at9, { type: 'TIMER_EXPIRED' })

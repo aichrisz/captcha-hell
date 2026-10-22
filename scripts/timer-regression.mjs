@@ -9,7 +9,8 @@ const { chromium } = await import(playwrightModule)
 const browser = await chromium.launch({ headless: true })
 const pageErrors = []
 const pages = new Set()
-const durationFor = (round) => round >= 4 && round <= 6 ? 15 : 20
+const durationFor = (round) => round >= 4 && round <= 5 ? 15 : 20
+const timerFor = (round) => round === 10 ? 'final' : round === 6 ? 'untimed' : `${durationFor(round)}s`
 const debugURL = () => {
   const url = new URL(baseURL)
   url.searchParams.set('debug', '1')
@@ -50,8 +51,7 @@ async function openRun(round = 1) {
   for (let current = 1; current < round; current += 1) {
     await page.getByRole('button', { name: 'Next round', exact: true }).click()
   }
-  const timer = round === 10 ? 'final' : `${durationFor(round)}s`
-  await assertHud(page, round, timer, 0)
+  await assertHud(page, round, timerFor(round), 0)
   return page
 }
 
@@ -80,18 +80,27 @@ try {
     console.log('PASS: three one-strike timer expiries exhaust retries; restart restores round 1.')
   }
 
-  for (let round = 1; round <= 9; round += 1) {
+  for (const round of [1, 2, 3, 4, 5, 7, 8, 9]) {
     const page = await openRun(round)
     await page.clock.runFor(durationFor(round) * 1000)
     if (round <= 6) {
       await waitForHud(page, round, `${durationFor(round)}s`, 1)
     } else {
       const nextRound = round + 1
-      await waitForHud(page, nextRound, nextRound === 10 ? 'final' : `${durationFor(nextRound)}s`, 1)
+      await waitForHud(page, nextRound, timerFor(nextRound), 1)
     }
     await closePage(page)
   }
-  console.log('PASS: expiry lifecycle covered for every timed round 1-9; round 7 advances only to 8.')
+  console.log('PASS: expiry lifecycle covered for timed rounds 1-5 and 7-9; round 7 advances only to 8.')
+  {
+    const page = await openRun(6)
+    const receiptBefore = await page.locator('[data-receipt-announcer]').textContent()
+    await page.clock.runFor(60_000)
+    await assertHud(page, 6, 'untimed', 0)
+    assert.equal(await page.locator('[data-receipt-announcer]').textContent(), receiptBefore, 'waiting on round 6 creates no expiry receipt')
+    await closePage(page)
+    console.log('PASS: waiting on round 6 remains untimed with no strike or receipt.')
+  }
 
   {
     const page = await openRun(1)

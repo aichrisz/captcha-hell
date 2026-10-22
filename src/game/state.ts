@@ -75,11 +75,12 @@ function advance(state: GameState): GameState {
 function passRound(state: GameState, result: RoundResult): GameState {
   const def = getRound(state.round)
   const retried = state.attempt > 0
-  const score = state.score + scorePass(result.timeLeftSec, retried)
+  const timeLeftSec = def.timerSec === 0 ? 0 : result.timeLeftSec
+  const score = state.score + scorePass(timeLeftSec, retried)
 
   let suspicion = state.suspicion
   if (def.timerSec > 0) {
-    const frac = result.timeLeftSec / def.timerSec
+    const frac = timeLeftSec / def.timerSec
     if (frac < 0.2) suspicion = applySuspicion(suspicion, 'slowAnswer')
     else if (!retried && frac >= 0.5) suspicion = applySuspicion(suspicion, 'cleanFastPass')
   }
@@ -128,6 +129,7 @@ export function reducer(state: GameState, action: Action): GameState {
 
     case 'SUBMIT_ROUND': {
       if (state.phase !== 'play') return state
+      if (action.identity && (action.identity.round !== state.round || action.identity.attempt !== state.attempt)) return state
       const next = action.result.passed
         ? passRound(state, action.result)
         : failRound(state, action.result)
@@ -157,6 +159,7 @@ export function reducer(state: GameState, action: Action): GameState {
     case 'TIMER_EXPIRED': {
       if (state.phase !== 'play') return state
       const def = getRound(state.round)
+      if (def.timerSec === 0) return state
       const { strikes, lost } = applyStrike(state, 'timerExpiry')
       const next = { ...state, strikes }
       const resolved = lost

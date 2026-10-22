@@ -21,9 +21,16 @@ describe('rounds data', () => {
 
   it('covers all required puzzle types', () => {
     const types = new Set(ROUNDS.map((r) => r.type))
-    for (const t of ['grid', 'checkbox', 'timedClick', 'slider', 'wordChoice', 'recall', 'final']) {
+    for (const t of ['grid', 'checkbox', 'timedClick', 'slider', 'stamps', 'wordChoice', 'recall', 'final']) {
       expect(types.has(t as never)).toBe(true)
     }
+  })
+
+  it('keeps round 6 as an untimed retryable stage 2 stamp puzzle', () => {
+    expect(getRound(6)).toMatchObject({ id: 6, stage: 2, type: 'stamps', timerSec: 0, allowRetry: true })
+    expect(ROUNDS).toHaveLength(10)
+    expect(getRound(7)).toMatchObject({ id: 7, type: 'wordChoice', timerSec: 20, allowRetry: false })
+    expect(getRound(10).type).toBe('final')
   })
 
   it('getRound is 1-indexed', () => {

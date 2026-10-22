@@ -26,6 +26,7 @@ const pages = new Set()
 const pageErrors = []
 const results = []
 const normalEndingIds = []
+const clerkEntryTitles = []
 const screenshotsDir = path.join(evidenceDir, 'screenshots')
 const focusedOnly = process.env.REPLAY_CRITERION === 'focused-disclosure'
 await mkdir(screenshotsDir, { recursive: true })
@@ -49,6 +50,7 @@ async function openPage({ viewport = { width: 390, height: 844 }, clock = true, 
   page.setDefaultTimeout(6000)
   page.on('pageerror', (error) => pageErrors.push(error.message))
   page.on('console', (message) => { if (message.type() === 'error') pageErrors.push(message.text()) })
+  page.__captchaClockMode = clock ? 'controlled' : 'ordinary'
   if (clock) await page.clock.install()
   await page.goto(pageURL(debug))
   if (clock) await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000))
@@ -65,6 +67,11 @@ async function start(page) {
   if (await page.getByRole('button', { name: 'Begin verification', exact: true }).count()) {
     await page.getByRole('button', { name: 'Begin verification', exact: true }).click()
   }
+}
+
+async function fileStampedDocuments(page) {
+  for (const stamp of ['Witness', 'Copy', 'Redact']) await page.getByRole('button', { name: stamp, exact: true }).click()
+  await page.getByRole('button', { name: 'File', exact: true }).click()
 }
 
 async function attachReceiptObserver(page) {
@@ -209,7 +216,10 @@ async function runJourney(page, options) {
     blockedBytes = null,
     stopAfterHearing = false,
     finalPresentationAudit = false,
+    ordinaryClock = false,
   } = options
+  const clockMode = page.__captchaClockMode ?? 'controlled'
+  assert.equal(clockMode, ordinaryClock ? 'ordinary' : 'controlled', 'journey clock configuration matches the executed clock path')
   const trace = []
   let sequence = 0
   const ownerHandle = options.ownerHandle ?? await page.locator('[data-receipt-announcer]').elementHandle()
@@ -272,12 +282,13 @@ async function runJourney(page, options) {
   trace.push({ round: 3, action: 'submit interpretation', poster, selected: selectedRound3 })
   await assertRound(page, 4)
 
-  await page.clock.runFor(3450)
+  if (ordinaryClock) await page.waitForTimeout(3450)
+  else await page.clock.runFor(3450)
   await page.getByText('Verification window open. Click VERIFY now.', { exact: true }).waitFor()
   // This verified state intentionally pulses forever; force skips Playwright's stability wait, not the real pointer event.
   await page.locator('.verify').click({ force: true })
   await waitReceipt(page, ++sequence)
-  trace.push({ round: 4, action: 'click VERIFY in real window' })
+  trace.push({ round: 4, action: 'click VERIFY in real window', clockMode })
   await assertRound(page, 5)
 
   const slider = page.getByRole('slider', { name: 'alignment slider' })
@@ -290,10 +301,9 @@ async function runJourney(page, options) {
   trace.push({ round: 5, action: 'align slider at target' })
   await assertRound(page, 6)
 
-  for (const index of [0, 2, 4, 7]) await page.locator('.cell').nth(index).click()
-  await page.getByRole('button', { name: 'Verify selection', exact: true }).click()
+  await fileStampedDocuments(page)
   await waitReceipt(page, ++sequence)
-  trace.push({ round: 6, action: 'submit human tiles', selected: [0, 2, 4, 7] })
+  trace.push({ round: 6, action: 'witness, copy, redact and file' })
   await assertRound(page, 7)
 
   await page.getByRole('button', { name: 'Cry at a song from 2009', exact: true }).click()
@@ -522,6 +532,8 @@ async function runJourney(page, options) {
   }
   assert.equal((await receiptChanges(page)).at(-1), liveText, 'collection persistence rerender does not duplicate the receipt update')
 
+  if (!debugSession && !seededCollection && !storageBlocked) await assertClerkRoundTrip(page, expectedTitle)
+
   if (auditNoop) {
     const expectedChanges = await receiptChanges(page)
     assert.equal(expectedChanges.length, sequence, 'only accepted verdicts create semantic receipt text updates')
@@ -529,10 +541,32 @@ async function runJourney(page, options) {
   const screenshotPrefix = debugSession ? 'debug-ordinary' : storageBlocked ? 'storage-blocked' : 'normal'
   const screenshot = await capture(page, `${screenshotPrefix}-${endingId}`)
   const scores = await page.locator('.result dd').allTextContents()
-  const result = { endingId, title: expectedTitle, trace, receipt: liveText, receiptSequence: sequence, collectionBytes: durableBytes, resultValues: scores, screenshot, freezeScreenshot, freezeLayoutAudit }
+  const result = { endingId, title: expectedTitle, clockMode, trace, receipt: liveText, receiptSequence: sequence, collectionBytes: durableBytes, resultValues: scores, screenshot, freezeScreenshot, freezeLayoutAudit }
   results.push(result)
   if (!debugSession && !seededCollection) normalEndingIds.push(endingId)
   return result
+}
+
+async function assertClerkRoundTrip(page, expectedTitle) {
+  const snapshot = async () => page.evaluate(() => ({
+    title: document.querySelector('.ending h1')?.textContent?.trim(),
+    results: [...document.querySelectorAll('.ending .result dd')].map((element) => element.textContent?.trim()),
+    receipt: document.querySelector('.ending .verdict-receipt')?.textContent?.trim(),
+    dossier: document.querySelector('.ending .ending-dossier')?.textContent?.trim(),
+    liveReceipt: document.querySelector('[data-receipt-announcer]')?.textContent?.trim(),
+    storage: Object.fromEntries(Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
+      .filter((key) => key !== null).sort().map((key) => [key, localStorage.getItem(key)])),
+  }))
+  const before = await snapshot()
+  const trigger = page.getByRole('button', { name: 'Acting Clerk', exact: true })
+  await trigger.click()
+  await page.getByRole('heading', { name: 'Acting Clerk', exact: true }).waitFor()
+  assert.equal(await page.locator('.clerk-notice').textContent(), 'Training only. Your verdict and best score do not change.')
+  await page.getByRole('button', { name: 'Back to verdict', exact: true }).click()
+  await page.getByRole('heading', { name: expectedTitle, exact: true }).waitFor()
+  assert.equal(await trigger.evaluate((button) => document.activeElement === button), true, 'closing clerk restores trigger focus')
+  assert.deepEqual(await snapshot(), before, `${expectedTitle}: optional clerk leaves exact verdict, stats, receipt, dossier, and storage unchanged`)
+  clerkEntryTitles.push(expectedTitle)
 }
 
 async function runRejected() {
@@ -561,6 +595,7 @@ async function runRejected() {
   await waitForCollection(page, 'rejected')
   assert.deepEqual(JSON.parse(await page.evaluate((key) => localStorage.getItem(key), ENDINGS_KEY)), ['rejected'])
   await inspectDossier(page, { count: 1, titles: [endingTitles.rejected] })
+  await assertClerkRoundTrip(page, endingTitles.rejected)
   const screenshot = await capture(page, 'normal-rejected')
   const result = { endingId: 'rejected', title: endingTitles.rejected, trace, receipt: await receiptText(page), screenshot }
   results.push(result)
@@ -611,7 +646,7 @@ async function runSliderThirdMiss() {
   assert.equal(hud.strikes, '1', 'third miss creates exactly one strike and retries')
   assert.equal(hud.timer, '15s')
   assert.equal(await slider.inputValue(), '0', 'third-miss retry retains slider value')
-  assert.equal(await page.locator('.slider-wrap span').evaluate((element) => element.style.width), '16%', 'third-miss retry restores initial tolerance')
+  assert.equal(await page.locator('.slider-tolerance').evaluate((element) => element.style.width), '16%', 'third-miss retry restores initial tolerance')
   assert.match(await receiptText(page), /Rejected; retry available\. Round 5\. Strikes \+1\./)
   results.push({ scenario: 'slider third-miss retry reset', passed: true, hud, retainedValue: await slider.inputValue() })
   await closeContext(context)
@@ -652,7 +687,7 @@ async function runSliderExpiry() {
   await slider.press('Home')
   for (let miss = 0; miss < 2; miss += 1) await page.getByRole('button', { name: 'Lock alignment', exact: true }).click()
   assert.equal(await page.getByText('Misses: 2/3', { exact: true }).count(), 1)
-  assert.equal(await page.locator('.slider-wrap span').evaluate((element) => element.style.width), '4%')
+  assert.equal(await page.locator('.slider-tolerance').evaluate((element) => element.style.width), '4%')
   await page.clock.runFor(15_000)
   await page.waitForFunction(() => document.querySelector('.hud .stat:nth-of-type(5) strong')?.textContent === '5/10')
   const hud = await readHud(page)
@@ -660,7 +695,7 @@ async function runSliderExpiry() {
   assert.equal(hud.timer, '15s')
   await page.getByText('Misses: 0/3', { exact: true }).waitFor()
   assert.equal(await slider.inputValue(), '0', 'expiry retry retains slider value')
-  assert.equal(await page.locator('.slider-wrap span').evaluate((element) => element.style.width), '16%', 'expiry retry restores initial tolerance')
+  assert.equal(await page.locator('.slider-tolerance').evaluate((element) => element.style.width), '16%', 'expiry retry restores initial tolerance')
   results.push({ scenario: 'slider timer retry reset', passed: true, hud, retainedValue: await slider.inputValue() })
   await closeContext(context)
 }
@@ -819,12 +854,15 @@ try {
   })
   await closeContext(probably.context)
 
-  const ghost = await openPage()
+  const ghost = await openPage({ clock: false })
   ghost.pageOwner = await ghost.page.locator('[data-receipt-announcer]').elementHandle()
   await runJourney(ghost.page, {
     endingId: 'ghost', poster: 'poster', finalAction: 'matter',
-    ownerHandle: ghost.pageOwner,
+    ownerHandle: ghost.pageOwner, ordinaryClock: true,
   })
+  const ordinaryJourney = results.find((result) => result.endingId === 'ghost')
+  assert.equal(ordinaryJourney.clockMode, 'ordinary', 'one complete normal ending used the ordinary browser clock')
+  assert.equal(ordinaryJourney.trace.find((entry) => entry.round === 4).clockMode, 'ordinary', 'ordinary clock mode is captured in the full journey trace')
   await closeContext(ghost.context)
 
   const wrongHearing = await openPage()
@@ -846,6 +884,8 @@ try {
 
   assert.deepEqual([...normalEndingIds].sort(), ['flagged', 'ghost', 'probablyHuman', 'rejected', 'tooPerfect', 'verified'].sort(),
     'all six actual no-debug, unseeded terminal journeys executed exactly once')
+  assert.deepEqual([...clerkEntryTitles].sort(), [endingTitles.flagged, endingTitles.ghost, endingTitles.probablyHuman, endingTitles.rejected, endingTitles.tooPerfect, endingTitles.verified].sort(),
+    'Acting Clerk entry and exact-state return are proven on all six natural endings')
   await runAppealClamp()
   await runAdvancedExpiryReason()
   await runSliderThirdMiss()
@@ -857,7 +897,7 @@ try {
   }
   assert.deepEqual(pageErrors, [], `browser page/console errors: ${pageErrors.join('; ')}`)
 
-  await writeFile(path.join(evidenceDir, 'replay-results.json'), `${JSON.stringify({ baseURL, results, pageErrors }, null, 2)}\n`)
+  await writeFile(path.join(evidenceDir, 'replay-results.json'), `${JSON.stringify({ baseURL, results, pageErrors, clerkEntryTitles }, null, 2)}\n`)
   console.log(focusedOnly
     ? `PASS: focused keyboard refusal disclosure at 320px/200% text. Evidence: ${evidenceDir}`
     : `PASS: six natural no-debug endings, opposite semantic recall keys, wrong-answer consequence, refusal, receipt stability, collection lifecycle, appeal clamp, slider expiry and debug exclusion. Evidence: ${evidenceDir}`)

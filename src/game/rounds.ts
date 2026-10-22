@@ -5,6 +5,7 @@ import type { TimedClickData } from './puzzles/timedClick'
 import type { SliderData } from './puzzles/slider'
 import type { WordChoiceData } from './puzzles/wordChoice'
 import type { RecallData } from './puzzles/recall'
+import type { StampsData } from './puzzles/stamps'
 
 export interface FinalData {
   prompt: string
@@ -55,14 +56,9 @@ const round5: SliderData = {
   maxMisses: 3,
 }
 
-const round6: GridData = {
-  prompt: 'Select all squares containing humans.',
-  cells: [
-    { icon: '\u{1F9CD}' }, { icon: '\u{1F916}' }, { icon: '\u{1FA9E}', label: 'you?' },
-    { icon: '\u{1F408}' }, { icon: '\u{1F469}\u{200D}\u{1F33E}' }, { icon: '\u{1F5FF}' },
-    { icon: '\u{1F916}\u{1F3A9}', label: 'robot with hat' }, { icon: '\u{1F9D1}\u{200D}\u{1F680}' }, { icon: '\u{1F33B}' },
-  ],
-  correct: [0, 2, 4, 7],
+const round6: StampsData = {
+  prompt: 'Complete the record before sending it to the registry.',
+  statement: 'Statement 06-B: The office fern has requested dependent status.',
 }
 
 const round7: WordChoiceData = {
@@ -114,7 +110,7 @@ export const ROUNDS: RoundDef[] = [
   { id: 3, stage: 1, type: 'grid', timerSec: 20, allowRetry: true, data: round3 },
   { id: 4, stage: 2, type: 'timedClick', timerSec: 15, allowRetry: true, data: round4 },
   { id: 5, stage: 2, type: 'slider', timerSec: 15, allowRetry: true, data: round5 },
-  { id: 6, stage: 2, type: 'grid', timerSec: 15, allowRetry: true, data: round6 },
+  { id: 6, stage: 2, type: 'stamps', timerSec: 0, allowRetry: true, data: round6 },
   { id: 7, stage: 3, type: 'wordChoice', timerSec: 20, allowRetry: false, data: round7 },
   { id: 8, stage: 3, type: 'recall', timerSec: 20, allowRetry: false, data: round8 },
   { id: 9, stage: 3, type: 'grid', timerSec: 20, allowRetry: false, data: round9 },

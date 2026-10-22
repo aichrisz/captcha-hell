@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
+import ClerkDesk from './components/ClerkDesk'
 import { reducer, initialState } from './game/state'
 import { getRound, type FinalData } from './game/rounds'
 import { ENDING_COPY } from './game/endings'
@@ -16,9 +17,11 @@ import { buildRecallOptions, evalRecall } from './game/puzzles/recall'
 import type { TimedClickData } from './game/puzzles/timedClick'
 import { evalClick } from './game/puzzles/timedClick'
 import type { SliderData } from './game/puzzles/slider'
-import { attemptSlider } from './game/puzzles/slider'
+import { attemptSlider, evalSlider } from './game/puzzles/slider'
 import type { WordChoiceData } from './game/puzzles/wordChoice'
 import { evalChoice } from './game/puzzles/wordChoice'
+import type { StampAction, StampsData } from './game/puzzles/stamps'
+import { evaluateDocuments } from './game/puzzles/stamps'
 import type { EndingId, GameState, LastVerdict, RoundResult, VerdictMeasures } from './game/types'
 
 function formatTime(sec: number) {
@@ -237,8 +240,8 @@ export default function App() {
     beep('tick')
   }
 
-  const submit = (result: RoundResult) => {
-    dispatch({ type: 'SUBMIT_ROUND', result })
+  const submit = (result: RoundResult, identity?: { round: number; attempt: number }) => {
+    dispatch({ type: 'SUBMIT_ROUND', result, identity })
     beep(result.passed ? 'ok' : 'bad')
   }
 
@@ -362,6 +365,7 @@ function EndingDossier({ endings, notSaved }: { endings: EndingId[]; notSaved: b
 }
 
 function Header({ state, humanity, timeLeft, roundTimer, dispatch }: { state: GameState; humanity: number; timeLeft: number; roundTimer: number; dispatch: React.Dispatch<any> }) {
+  const timerLabel = roundTimer ? formatTime(timeLeft) : state.round === 10 ? 'final' : 'untimed'
   return (
     <header className="hud">
       <Meter label="Score" value={state.score} max={500} plain />
@@ -369,7 +373,7 @@ function Header({ state, humanity, timeLeft, roundTimer, dispatch }: { state: Ga
       <Meter label="Humanity" value={humanity} max={100} blue />
       <Meter label="Strikes" value={state.strikes} max={3} danger />
       <div className="stat"><span>Round</span><strong>{state.round}/10</strong></div>
-      <div className="stat"><span>Timer</span><strong>{roundTimer ? formatTime(timeLeft) : 'final'}</strong></div>
+      <div className="stat"><span>Timer</span><strong>{timerLabel}</strong></div>
       <button onClick={() => dispatch({ type: 'SOUND_TOGGLE' })}>Sound {state.soundOn ? 'on' : 'off'}</button>
     </header>
   )
@@ -380,11 +384,12 @@ function Meter({ label, value, max, danger, plain, blue }: { label: string; valu
   return <div className={`stat ${danger ? 'danger' : ''} ${blue ? 'human' : ''}`}><span>{label}</span><strong>{plain ? value : Math.round(value)}</strong><i style={{ width: `${pct}%` }} /></div>
 }
 
-function Puzzle({ round, state, timeLeft, submit, dispatch, reduceMotion }: { round: ReturnType<typeof getRound>; state: GameState; timeLeft: number; submit: (r: RoundResult) => void; dispatch: React.Dispatch<any>; reduceMotion: boolean }) {
+function Puzzle({ round, state, timeLeft, submit, dispatch, reduceMotion }: { round: ReturnType<typeof getRound>; state: GameState; timeLeft: number; submit: (r: RoundResult, identity?: { round: number; attempt: number }) => void; dispatch: React.Dispatch<any>; reduceMotion: boolean }) {
   if (round.type === 'grid') return <GridPuzzle roundId={round.id} data={round.data as GridData} timeLeft={timeLeft} submit={submit} />
   if (round.type === 'checkbox') return <CheckboxPuzzle data={round.data as CheckboxData} timeLeft={timeLeft} submit={submit} reduceMotion={reduceMotion} />
   if (round.type === 'timedClick') return <TimedClick data={round.data as TimedClickData} attempt={state.attempt} timeLeft={timeLeft} submit={submit} />
   if (round.type === 'slider') return <SliderPuzzle data={round.data as SliderData} attempt={state.attempt} timeLeft={timeLeft} submit={submit} />
+  if (round.type === 'stamps') return <StampPuzzle data={round.data as StampsData} roundId={round.id} attempt={state.attempt} submit={submit} />
   if (round.type === 'wordChoice') return <WordPuzzle data={round.data as WordChoiceData} timeLeft={timeLeft} submit={submit} />
   if (round.type === 'recall') return <RecallPuzzle data={round.data as RecallData} state={state} timeLeft={timeLeft} submit={submit} />
   return <FinalPuzzle data={round.data as FinalData} state={state} dispatch={dispatch} reduceMotion={reduceMotion} />
@@ -455,13 +460,125 @@ function SliderPuzzle({ data, attempt, timeLeft, submit }: { data: SliderData; a
   const [tol, setTol] = useState(data.tolerance)
   const [misses, setMisses] = useState(0)
   const previousAttempt = useRef(attempt)
+  const withinTolerance = evalSlider(value, data.target, tol)
+  const registrationStatus = withinTolerance ? 'Within tolerance' : value < data.target ? 'Copy left of registration' : 'Copy right of registration'
+  const statusText = `${registrationStatus}. target ${data.target}; tolerance plus or minus ${tol}.`
+  const offsetPercent = (value - data.target) * 0.19
   useEffect(() => {
     if (previousAttempt.current === attempt) return
     previousAttempt.current = attempt
     setMisses(0)
     setTol(data.tolerance)
   }, [attempt, data.tolerance])
-  return <div><h2>{data.prompt}</h2><div className="slider-wrap"><span style={{ left: `${data.target}%`, width: `${tol * 2}%` }} /><input aria-label="alignment slider" type="range" min="0" max="100" value={value} onChange={(e) => setValue(Number(e.target.value))} /></div><button className="primary wide" onClick={() => { const r = attemptSlider(value, data, tol, misses); if (r.passed) submit({ passed: true, timeLeftSec: timeLeft }); else if (r.strike) submit({ passed: false, timeLeftSec: timeLeft, strikeSource: 'wrongSubmit' }); else { setTol(r.tolerance); setMisses(r.misses); } }}>Lock alignment</button><p className="hint">Misses: {misses}/{data.maxMisses}</p></div>
+  return <div className="slider-puzzle">
+    <h2>{data.prompt}</h2>
+    <p id="slider-instructions" className="slider-instructions">Move the duplicate into the registration band, then lock alignment to submit.</p>
+    <div
+      className="registration-illustration"
+      data-registration-illustration
+      data-value={value}
+      data-target={data.target}
+      data-tolerance={tol}
+      data-offset-percent={offsetPercent.toFixed(2)}
+      aria-hidden="true"
+    >
+      <div className="registration-stage">
+        <div className="registration-paper registration-original">
+          <span className="registration-paper-label">ORIGINAL 05-C</span>
+          <span className="registration-mark registration-mark-left" />
+          <span className="registration-mark registration-mark-right" />
+          <span className="registration-line registration-line-long" />
+          <span className="registration-line registration-line-short" />
+          <span className="registration-seal" />
+        </div>
+        <div className="registration-paper registration-copy" data-registration-copy style={{ '--registration-offset': `${offsetPercent}%` } as React.CSSProperties}>
+          <span className="registration-paper-label">COPY 05-C</span>
+          <span className="registration-mark registration-mark-left" />
+          <span className="registration-mark registration-mark-right" />
+          <span className="registration-line registration-line-long" />
+          <span className="registration-line registration-line-short" />
+          <span className="registration-seal" />
+        </div>
+      </div>
+      <svg className="registration-scale" viewBox="0 0 100 20" preserveAspectRatio="none">
+        <line className="registration-scale-track" x1="0" y1="10" x2="100" y2="10" />
+        <rect data-tolerance-band x={data.target - tol} y="5" width={tol * 2} height="10" />
+        <line className="registration-target-mark" x1={data.target} y1="1" x2={data.target} y2="19" />
+      </svg>
+    </div>
+    <p id="slider-registration-status" className="slider-registration-status" role="status" aria-live="polite">{statusText}</p>
+    <div className="slider-wrap">
+      <span className="slider-tolerance" style={{ left: `${data.target}%`, width: `${tol * 2}%` }} aria-hidden="true" />
+      <input
+        aria-label="alignment slider"
+        aria-describedby="slider-instructions slider-registration-status"
+        aria-valuetext={statusText}
+        type="range"
+        min="0"
+        max="100"
+        value={value}
+        onChange={(e) => setValue(Number(e.target.value))}
+      />
+    </div>
+    <button className="primary wide" onClick={() => { const r = attemptSlider(value, data, tol, misses); if (r.passed) submit({ passed: true, timeLeftSec: timeLeft }); else if (r.strike) submit({ passed: false, timeLeftSec: timeLeft, strikeSource: 'wrongSubmit' }); else { setTol(r.tolerance); setMisses(r.misses); } }}>Lock alignment</button>
+    <p className="hint">Misses: {misses}/{data.maxMisses}</p>
+  </div>
+}
+
+function StampPuzzle({ data, roundId, attempt, submit }: { data: StampsData; roundId: number; attempt: number; submit: (r: RoundResult, identity?: { round: number; attempt: number }) => void }) {
+  const [sequence, setSequence] = useState<StampAction[]>([])
+  const [feedback, setFeedback] = useState('')
+  const [localStatus, setLocalStatus] = useState('No stamps applied. Original readable and not witnessed; Copy absent.')
+  const filedAttempt = useRef<number | null>(null)
+  const documents = evaluateDocuments(sequence)
+  const used = (action: StampAction) => sequence.includes(action)
+  const summarize = (result: ReturnType<typeof evaluateDocuments>) => {
+    const witness = result.witness === 'valid' ? 'witnessed' : result.witness === 'invalid' ? 'witnessed too late' : 'not witnessed'
+    const copy = !result.copyPresent ? 'absent' : `${result.copyReadable ? 'readable' : 'unreadable'}, ${result.copyCertified ? 'certified' : 'not certified'}`
+    return `Original ${result.originalReadable ? 'readable' : 'redacted'} and ${witness}; Copy ${copy}.`
+  }
+  const stamp = (action: StampAction) => {
+    const next = [...sequence, action]
+    setSequence(next)
+    setLocalStatus(`${action[0].toUpperCase()}${action.slice(1)} stamp applied. ${summarize(evaluateDocuments(next))}`)
+    setFeedback('')
+  }
+  const file = () => {
+    if (filedAttempt.current === attempt) return
+    filedAttempt.current = attempt
+    const result = evaluateDocuments(sequence)
+    setFeedback(result.valid ? '' : `File returned. ${result.missing.join(' ')}`)
+    submit({ passed: result.valid, timeLeftSec: 0, strikeSource: 'wrongSubmit' }, { round: roundId, attempt })
+  }
+
+  return <div className="stamp-puzzle">
+    <h2>{data.prompt}</h2>
+    <p className="stamp-rules" id="stamp-rules">Witness while the Original is readable. Copy captures its readable state and witness mark at that moment. Redact the Original before filing.</p>
+    <p className="stamp-consequence" id="stamp-consequence">Wrong or incomplete filing: +1 strike and +10 suspicion. A retry loses the clean-pass bonus. The third strike ends the run.</p>
+    <div className="document-pair">
+      <article className="document-card" aria-label="Original document">
+        <div className="document-heading"><span>ORIGINAL</span><span>Record 06-B</span></div>
+        <p className="document-status"><span>{documents.originalReadable ? 'Readable' : 'Redacted'}</span><span>{documents.witness === 'valid' ? 'Witnessed' : documents.witness === 'invalid' ? 'Witnessed too late' : 'Not witnessed'}</span></p>
+        <p className={documents.originalReadable ? 'document-text' : 'document-text redacted'}>{documents.originalReadable ? data.statement : 'REDACTED BY ORDER OF THE REGISTRY'}</p>
+      </article>
+      <article className="document-card copy-card" aria-label="Certified copy">
+        <div className="document-heading"><span>COPY</span><span>Duplicate 06-B</span></div>
+        <p className="document-status"><span>{!documents.copyPresent ? 'Absent' : documents.copyReadable ? 'Readable' : 'Unreadable'}</span><span>{documents.copyCertified ? 'Certified' : 'Not certified'}</span></p>
+        <p className={documents.copyReadable ? 'document-text' : 'document-text redacted'}>{documents.copyPresent ? documents.copyReadable ? data.statement : 'Unreadable when copied' : 'No duplicate has been issued.'}</p>
+      </article>
+    </div>
+    <p className="stamp-local-note">Stamps stay local until filing. Editing is untimed.</p>
+    <p className="stamp-local-status" role="status" aria-live="polite">{localStatus}</p>
+    <div className="stamp-actions" role="group" aria-label="Document stamps">
+      <button disabled={used('witness')} onClick={() => stamp('witness')}>Witness</button>
+      <button disabled={used('copy')} onClick={() => stamp('copy')}>Copy</button>
+      <button disabled={used('redact')} onClick={() => stamp('redact')}>Redact</button>
+      <button disabled={sequence.length === 0} onClick={() => { const next = sequence.slice(0, -1); setSequence(next); setLocalStatus(`Undo applied. ${summarize(evaluateDocuments(next))}`); setFeedback('') }}>Undo</button>
+      <button disabled={sequence.length === 0} onClick={() => { setSequence([]); setLocalStatus('Reset applied. Original readable and not witnessed; Copy absent.'); setFeedback('') }}>Reset</button>
+      <button className="primary" aria-describedby="stamp-rules stamp-consequence" onClick={file}>File</button>
+    </div>
+    {feedback && <p className="stamp-feedback" role="status">{feedback}</p>}
+  </div>
 }
 
 function WordPuzzle({ data, timeLeft, submit }: { data: WordChoiceData; timeLeft: number; submit: (r: RoundResult) => void }) {
@@ -497,6 +614,16 @@ function Ending({ state, best, dispatch, ending, reduceMotion, endings, collecti
   const humanity = humanityOf(state)
   const [copyNote, setCopyNote] = useState('')
   const [showRaw, setShowRaw] = useState(false)
+  const [clerkOpen, setClerkOpen] = useState(false)
+  const clerkTrigger = useRef<HTMLButtonElement>(null)
+  const clerkWasOpen = useRef(false)
+  useLayoutEffect(() => {
+    if (clerkOpen) clerkWasOpen.current = true
+    else if (clerkWasOpen.current) {
+      clerkWasOpen.current = false
+      clerkTrigger.current?.focus()
+    }
+  }, [clerkOpen])
   const shareText = buildShareText({
     title: copy.title,
     score: state.score,
@@ -513,6 +640,9 @@ function Ending({ state, best, dispatch, ending, reduceMotion, endings, collecti
       setShowRaw(true)
       setCopyNote('Clipboard unavailable. Select the text below by hand.')
     }
+  }
+  if (clerkOpen) {
+    return <main className={`start ending crt ${reduceMotion ? 'reduce-motion' : ''}`}><ClerkDesk reduceMotion={reduceMotion} onExit={() => setClerkOpen(false)} /></main>
   }
   return (
     <main className={`start ending crt ${reduceMotion ? 'reduce-motion' : ''}`}>
@@ -533,6 +663,7 @@ function Ending({ state, best, dispatch, ending, reduceMotion, endings, collecti
         <div className="actions">
           <button className="primary" onClick={() => dispatch({ type: 'START_RUN' })}>Try again</button>
           <button onClick={copyResult}>Copy result</button>
+          <button ref={clerkTrigger} onClick={() => setClerkOpen(true)}>Acting Clerk</button>
         </div>
         {copyNote && <p className="copy-note" aria-live="polite">{copyNote}</p>}
         {showRaw && <pre className="share-raw">{shareText}</pre>}

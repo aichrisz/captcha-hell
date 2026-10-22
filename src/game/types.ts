@@ -5,6 +5,7 @@ export type PuzzleType =
   | 'checkbox'
   | 'timedClick'
   | 'slider'
+  | 'stamps'
   | 'wordChoice'
   | 'recall'
   | 'final'
@@ -47,7 +48,7 @@ export interface RoundDef {
   id: number            // 1-10
   stage: 1 | 2 | 3 | 4
   type: PuzzleType
-  timerSec: number      // round 10: counts up, timerSec ignored
+  timerSec: number      // 0 means untimed; the final round is labeled separately
   allowRetry: boolean   // true rounds 1-6, false 7-10
   data: unknown         // per-puzzle config object, typed per puzzle module
 }
@@ -85,7 +86,7 @@ export interface GameState {
 
 export type Action =
   | { type: 'START_RUN' }
-  | { type: 'SUBMIT_ROUND'; result: RoundResult }
+  | { type: 'SUBMIT_ROUND'; result: RoundResult; identity?: { round: number; attempt: number } }
   | { type: 'STRIKE'; source: StrikeSource }
   | { type: 'SUSPICION'; event: SuspicionEvent }
   | { type: 'TIMER_EXPIRED' }

@@ -275,9 +275,8 @@ async function playPerfectRun(page) {
   await dismissPopups(page)
   await page.getByRole('button', { name: 'Lock alignment', exact: true }).click()
   await dismissPopups(page)
-  for (const i of [0, 2, 4, 7]) await page.locator('.cell').nth(i).click()
-  await dismissPopups(page)
-  await page.getByRole('button', { name: 'Verify selection', exact: true }).click()
+  for (const stamp of ['Witness', 'Copy', 'Redact']) await page.getByRole('button', { name: stamp, exact: true }).click()
+  await page.getByRole('button', { name: 'File', exact: true }).click()
   await dismissPopups(page)
   await page.getByRole('button', { name: 'Cry at a song from 2009', exact: true }).click()
   await dismissPopups(page)
@@ -350,6 +349,34 @@ try {
             }
             if (viewport.width <= 520 || viewport.height <= 520) await capture(page, `${viewport.name}-${mode}-checkbox-dodge`, { mode, round, dodge: attempts })
           }
+          if (round === 5) {
+            const illustration = page.locator('[data-registration-illustration]')
+            assert.equal(await illustration.count(), 1, `${viewport.name} ${mode}: one registration illustration is present`)
+            assert.equal(await illustration.getAttribute('data-target'), '62')
+            assert.equal(await illustration.getAttribute('data-tolerance'), '8')
+            assert.equal(await illustration.getAttribute('data-value'), '50')
+            const status = await page.locator('#slider-registration-status').innerText()
+            assert.match(status, /Copy left of registration\. target 62; tolerance plus or minus 8\./, `${viewport.name} ${mode}: opening status explains the visible initial offset and band`)
+            assert.equal(await page.getByRole('slider', { name: 'alignment slider' }).getAttribute('aria-valuetext'), status)
+            const art = await illustration.evaluate((element) => {
+              const stage = element.querySelector('.registration-stage').getBoundingClientRect()
+              const original = element.querySelector('.registration-original').getBoundingClientRect()
+              const copy = element.querySelector('[data-registration-copy]').getBoundingClientRect()
+              return {
+                bounds: { left: element.getBoundingClientRect().left, right: element.getBoundingClientRect().right },
+                stage: { left: stage.left, right: stage.right },
+                original: { left: original.left, right: original.right, center: original.left + original.width / 2 },
+                copy: { left: copy.left, right: copy.right, center: copy.left + copy.width / 2 },
+                pointerEvents: getComputedStyle(element).pointerEvents,
+              }
+            })
+            assert.ok(art.bounds.left >= -1 && art.bounds.right <= viewport.width + 1, `${viewport.name} ${mode}: registration artwork exceeds viewport: ${JSON.stringify(art)}`)
+            assert.ok(art.original.left >= art.stage.left - 1 && art.copy.left >= art.stage.left - 1 && art.original.right <= art.stage.right + 1 && art.copy.right <= art.stage.right + 1, `${viewport.name} ${mode}: both paper layers remain inside their illustration: ${JSON.stringify(art)}`)
+            assert.ok(art.copy.center < art.original.center, `${viewport.name} ${mode}: initial duplicate is visibly displaced, not snapped to tolerance`)
+            assert.equal(art.pointerEvents, 'none', `${viewport.name} ${mode}: artwork never intercepts the native range`)
+            assert.ok((await page.getByRole('slider', { name: 'alignment slider' }).boundingBox()).height >= 44, `${viewport.name} ${mode}: native range remains a full-size target`)
+            await capture(page, `${viewport.name}-${mode}-round5-registration`, { mode, round, art, status })
+          }
           if (round === 10) {
             const box = page.locator('.final-box')
             const attempts = mode === 'reduced' ? 1 : 2
@@ -371,7 +398,7 @@ try {
           if (puzzleScreens.has(round) && round !== 2 && round !== 10 && (viewport.width <= 520 || viewport.height <= 520)) {
             await capture(page, `${viewport.name}-${mode}-round${round}`, { mode, round })
           }
-          if ([1, 3, 6, 9].includes(round)) {
+          if ([1, 3, 9].includes(round)) {
             const cells = await page.locator('.cell').evaluateAll((elements) => elements.map((element) => {
               const r = element.getBoundingClientRect()
               const label = element.querySelector('small')
@@ -394,6 +421,13 @@ try {
               assert.ok(cells.every((cell) => cell.bottom <= viewport.height), `${viewport.width}px round ${round}: entire grid fits on entry`)
               assert.ok(verify && verify.y + verify.height <= viewport.height, `${viewport.width}px: first grid Verify fits on entry: ${JSON.stringify(verify)}`)
             }
+          }
+          if (round === 6) {
+            assert.equal((await page.locator('.hud .stat').nth(5).innerText()).split('\n')[1], 'untimed', `${viewport.name} ${mode}: stamp round is visibly untimed`)
+            assert.equal(await page.locator('.document-card').count(), 2, `${viewport.name} ${mode}: Original and Copy are both displayed`)
+            const columns = await page.locator('.document-pair').evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(' ').length)
+            assert.equal(columns, viewport.width <= 520 ? 1 : 2, `${viewport.name} ${mode}: stamp papers reflow to the available width`)
+            await assertRequestedWidth(page, `${viewport.name} ${mode} stamp papers`)
           }
           if (round === 1 && viewport.width <= 520 && viewport.height > 520) {
             const appeal = page.locator('.appeal')
