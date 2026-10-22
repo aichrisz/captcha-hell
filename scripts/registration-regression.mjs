@@ -73,6 +73,7 @@ async function setRangeValue(page, value) {
     for (let step = 0; step < steps; step += 1) await slider.press(useEnd ? 'ArrowLeft' : 'ArrowRight')
   }
   assert.equal(await slider.inputValue(), String(value), `keyboard selects range value ${value}`)
+  await page.clock.runFor(32)
   return slider
 }
 
