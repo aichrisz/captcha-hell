@@ -114,7 +114,7 @@ async function choose(page, decision, reason) {
   await page.getByRole('radio', { name: reasonPattern }).check()
 }
 
-async function submitReview(page, decision, reason, doubleClick = false) {
+async function submitReview(page, decision, reason, doubleClick = false, { allowFeedbackScroll = false } = {}) {
   const caseLabel = (await page.locator('.clerk-case-heading').innerText()).split(':', 1)[0]
   await choose(page, decision, reason)
   const record = page.getByRole('button', { name: 'Record decision', exact: true })
@@ -128,13 +128,22 @@ async function submitReview(page, decision, reason, doubleClick = false) {
   assert.equal(await page.locator('.clerk-options input:not(:disabled)').count(), 0, 'recorded review locks both radio groups')
   assert.equal(await page.getByRole('button', { name: 'Next file', exact: true }).count() + await page.getByRole('button', { name: 'Finish shift', exact: true }).count(), 1, 'one advance control appears only after feedback')
   const nextAction = page.locator('.clerk-feedback + button')
-  await assertFocused(page, nextAction, `${caseLabel} next action after production focus`)
-  await assertFeedbackVisible(page, caseLabel)
+  const choice = page.locator(`#${caseLabel.toLowerCase().replace(' ', '-')}-dispensation`)
+  if (await choice.count() && await choice.isEnabled()) {
+    await assertFocused(page, choice, `${caseLabel} eligible disposition after production focus`)
+    await page.keyboard.press('Tab')
+    await assertFocused(page, nextAction, `${caseLabel} forward Tab from disposition reaches Next`)
+  } else {
+    await assertFocused(page, nextAction, `${caseLabel} next action after production focus`)
+  }
+  await assertFeedbackVisible(page, caseLabel, { allowScroll: allowFeedbackScroll })
   return status
 }
 
-async function advanceFile(page, last = false) {
-  await page.getByRole('button', { name: last ? 'Finish shift' : 'Next file', exact: true }).click()
+async function advanceFile(page, last = false, doubleClick = false) {
+  const action = page.getByRole('button', { name: last ? 'Finish shift' : 'Next file', exact: true })
+  if (doubleClick) await action.evaluate((button) => { button.click(); button.click() })
+  else await action.click()
   if (!last) assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('clerk-case-heading')), true, 'next file heading receives focus')
   else assert.equal(await page.evaluate(() => document.activeElement?.id === 'clerk-summary-title'), true, 'summary heading receives focus')
 }
@@ -154,7 +163,7 @@ async function snapshotNoOverflow(page, label) {
   const measured = await page.evaluate(() => {
     const width = document.documentElement.clientWidth
     const desk = document.querySelector('.clerk-desk')?.getBoundingClientRect()
-    const text = [...document.querySelectorAll('.clerk-option span, .clerk-evidence dt, .clerk-evidence dd, .clerk-rules li, .clerk-feedback p, .clerk-summary-list p')].map((element) => {
+    const text = [...document.querySelectorAll('.clerk-option span, .clerk-disposition-option span, .clerk-disposition-used, .clerk-disposition-summary, .clerk-evidence dt, .clerk-evidence dd, .clerk-rules li, .clerk-feedback p, .clerk-summary-list p')].map((element) => {
       const rect = element.getBoundingClientRect()
       return { text: element.textContent?.trim().slice(0, 70), left: rect.left, right: rect.right, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth }
     })
@@ -213,16 +222,16 @@ async function contrastMetrics(page) {
       }
       return color
     }
-    const textNodes = [...document.querySelectorAll('.clerk-desk .micro, .clerk-desk h1, .clerk-desk h2, .clerk-desk h3, .clerk-desk p, .clerk-desk li, .clerk-desk dt, .clerk-desk dd, .clerk-desk legend, .clerk-option span')]
+    const textNodes = [...document.querySelectorAll('.clerk-desk .micro, .clerk-desk h1, .clerk-desk h2, .clerk-desk h3, .clerk-desk p, .clerk-desk li, .clerk-desk dt, .clerk-desk dd, .clerk-desk legend, .clerk-option span, .clerk-disposition-option span')]
       .filter((element) => element.textContent?.trim())
       .map((element) => ({ text: element.textContent.trim().slice(0, 50), ratio: ratio(rgb(getComputedStyle(element).color), background(element)) }))
-    const controls = [...document.querySelectorAll('.clerk-desk button, .clerk-option')].map((element) => {
+    const controls = [...document.querySelectorAll('.clerk-desk button, .clerk-option, .clerk-disposition-option')].map((element) => {
       const style = getComputedStyle(element)
       const color = rgb(style.borderTopColor)
       const back = background(element.parentElement ?? element)
       return { text: element.textContent.trim().slice(0, 50), borderRatio: ratio(color, back), textRatio: ratio(rgb(style.color), rgb(style.backgroundColor)) }
     })
-    const radios = [...document.querySelectorAll('.clerk-option input')].map((element) => ({ accent: getComputedStyle(element).accentColor, ratio: ratio(rgb(getComputedStyle(element).accentColor), background(element.parentElement)) }))
+    const radios = [...document.querySelectorAll('.clerk-option input, .clerk-disposition-option input')].map((element) => ({ accent: getComputedStyle(element).accentColor, ratio: ratio(rgb(getComputedStyle(element).accentColor), background(element.parentElement)) }))
     return { textNodes, controls, radios }
   })
 }
@@ -254,18 +263,22 @@ async function assertFocused(page, locator, label) {
   return measured
 }
 
-async function assertFeedbackVisible(page, label) {
+async function assertFeedbackVisible(page, label, { allowScroll = false } = {}) {
   const measured = await page.evaluate(() => {
     const status = document.querySelector('[data-clerk-announcer]')
     const next = document.querySelector('.clerk-feedback + button')
     const targets = [...(status?.querySelectorAll('h3, p') ?? []), ...(next ? [next] : [])]
     return targets.map((element) => {
       const rect = element.getBoundingClientRect()
+      const range = document.createRange()
+      range.selectNodeContents(element)
+      const textRect = range.getBoundingClientRect()
       const style = getComputedStyle(element)
       return {
         text: element.textContent?.trim(), left: rect.left, right: rect.right,
-        top: rect.top, bottom: rect.bottom, viewportWidth: innerWidth,
-        viewportHeight: innerHeight,
+        top: rect.top, bottom: rect.bottom, documentTop: textRect.top + scrollY,
+        documentBottom: textRect.bottom + scrollY, documentHeight: document.documentElement.scrollHeight,
+        viewportWidth: innerWidth, viewportHeight: innerHeight, isNext: element === next,
         visible: style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) > 0,
         scrollWidth: element.scrollWidth, clientWidth: element.clientWidth,
       }
@@ -273,7 +286,12 @@ async function assertFeedbackVisible(page, label) {
   })
   assert.ok(measured.length >= 5, `${label}: outcome, identity, required decision/reason, explanation, and Next must exist: ${JSON.stringify(measured)}`)
   for (const item of measured) {
-    assert.ok(item.visible && item.left >= -1 && item.right <= item.viewportWidth + 1 && item.top >= -1 && item.bottom <= item.viewportHeight + 1, `${label}: feedback or Next is outside the actual focused viewport: ${JSON.stringify(item)}`)
+    assert.ok(item.visible && item.left >= -1 && item.right <= item.viewportWidth + 1, `${label}: feedback is hidden/clipped horizontally: ${JSON.stringify(item)}`)
+    if (allowScroll && !item.isNext) {
+      assert.ok(item.documentTop >= -1 && item.documentBottom <= item.documentHeight + 1, `${label}: feedback text is outside the scrollable document: ${JSON.stringify(item)}`)
+    } else {
+      assert.ok(item.top >= -1 && item.bottom <= item.viewportHeight + 1, `${label}: focused action or feedback is outside the actual viewport: ${JSON.stringify(item)}`)
+    }
     assert.ok(item.scrollWidth <= item.clientWidth + 1, `${label}: feedback or Next text is clipped: ${JSON.stringify(item)}`)
   }
 }
@@ -344,36 +362,52 @@ async function runNaturalInvariantJourney() {
     assert.equal(await page.getByRole('heading', { name: 'File A: Mira Vale', exact: true }).count(), 1, 'feedback stays on File A until explicit Next')
     assert.equal(await clerkStatus.evaluate((element, owner) => element === owner, clerkStatusOwner), true, 'same polite status owner survives File A submission')
     assert.equal(await page.evaluate(() => document.activeElement?.textContent?.trim()), 'Next file', 'focus moves to the available next action')
-    await advanceFile(page)
+    await advanceFile(page, false, true)
     assert.equal((await clerkStatus.innerText()).trim(), '', 'status clears before the next case')
     assert.equal(await clerkStatus.evaluate((element, owner) => element === owner, clerkStatusOwner), true, 'same polite status owner remains for File B')
     const fileB = await page.locator('.clerk-evidence').innerText()
     assert.match(fileB, /Original readability\s+Redacted and unreadable/)
     assert.match(fileB, /Copy readability\s+Readable/)
     assert.match(fileB, /Copy certification\s+Not certified/)
-    const feedbackB = await submitReview(page, correctAnswers[1][0], correctAnswers[1][1])
+    const feedbackB = await submitReview(page, correctAnswers[1][0], correctAnswers[1][1], true)
     assert.match(feedbackB, /Correct review/)
     assert.match(feedbackB, /File B: review recorded\./)
     assert.match(feedbackB, /Copy was made before certification/i)
     assert.match(feedbackB, /Required reason: Copy made before certification/)
     assert.equal(await clerkStatus.evaluate((element, owner) => element === owner, clerkStatusOwner), true, 'same polite status owner survives File B submission')
-    await advanceFile(page)
+    const fileBChoice = page.locator('#file-b-dispensation')
+    assert.equal(await fileBChoice.isChecked(), false, 'File B defaults to procedure')
+    assert.equal(await fileBChoice.isEnabled(), true)
+    await assertContrast(page, 'File B eligible disposition')
+    await assertWordsFit(page, '.clerk-disposition-option span, .clerk-disposition p', 'File B disposition text')
+    const dispositionBox = await page.locator('.clerk-disposition-option').boundingBox()
+    assert.ok(dispositionBox && dispositionBox.width >= 44 && dispositionBox.height >= 44, `File B associated checkbox label is at least 44px: ${JSON.stringify(dispositionBox)}`)
+    await fileBChoice.check()
+    await capture(page, 'clerk-file-b-dispensation-draft-on-320x740')
+    await fileBChoice.uncheck()
+    assert.equal(await fileBChoice.isChecked(), false, 'turning File B draft off leaves it unconsumed')
+    await advanceFile(page, false, true)
     assert.equal((await clerkStatus.innerText()).trim(), '', 'status clears before File C')
     assert.equal(await clerkStatus.evaluate((element, owner) => element === owner, clerkStatusOwner), true, 'same polite status owner remains for File C')
     const fileC = await page.locator('.clerk-evidence').innerText()
     assert.match(fileC, /Copy readability\s+Unreadable/)
     assert.match(fileC, /Copy certification\s+Certified/)
-    const feedbackC = await submitReview(page, correctAnswers[2][0], correctAnswers[2][1])
+    const feedbackC = await submitReview(page, correctAnswers[2][0], correctAnswers[2][1], true)
     assert.match(feedbackC, /Required reason: Copy made after redaction/)
     assert.match(feedbackC, /original was redacted before the copy was made/i)
     assert.equal(await clerkStatus.evaluate((element, owner) => element === owner, clerkStatusOwner), true, 'same polite status owner survives File C submission')
-    await advanceFile(page, true)
+    await advanceFile(page, true, true)
     await snapshotNoOverflow(page, 'natural summary 320px')
     await assertContrast(page, 'natural summary 320px')
     await capture(page, 'clerk-summary-320x740')
     assert.match(await page.locator('.clerk-count').textContent(), /3\/3/)
     assert.equal(await page.locator('.clerk-summary-list li').count(), 3)
-    for (const row of await page.locator('.clerk-summary-list li').all()) assert.match(await row.innerText(), /Your review:\s+Correct/)
+    for (const row of await page.locator('.clerk-summary-list li').all()) assert.match(await row.innerText(), /Your diagnosis:\s+Correct/)
+    const summaryText = await page.locator('.clerk-summary').innerText()
+    assert.match(summaryText, /Dispensation beneficiary: None/)
+    assert.match(summaryText, /File A[\s\S]*Final disposition: Accept - followed required procedure/)
+    assert.match(summaryText, /File B[\s\S]*Final disposition: Return - followed required procedure/)
+    assert.match(summaryText, /File C[\s\S]*Final disposition: Return - followed required procedure/)
     assert.equal(await page.evaluate(() => document.activeElement?.id === 'clerk-summary-title'), true, 'summary heading receives focus')
 
     await page.getByRole('button', { name: 'Review files again', exact: true }).click()
@@ -402,6 +436,153 @@ async function runNaturalInvariantJourney() {
     await page.getByRole('button', { name: 'Try again', exact: true }).click()
     assert.equal(await page.locator('.hud .stat').nth(4).innerText(), 'ROUND\n1/10', 'Try again still starts the existing game')
     return { ending: 'rejected', correctCount: '3/3', storageWrites: 0, screenshots: screenshots.slice(-2) }
+  } finally { await closeContext(context) }
+}
+
+async function runDispensationOnFileB() {
+  const { context, page } = await openPage({ debug: true, viewport: { width: 320, height: 740 }, mobile: true })
+  try {
+    await reachDebugEnding(page)
+    const verdictBefore = await verdictSnapshot(page)
+    const storageBefore = await storageSnapshot(page)
+    const writeCount = await page.evaluate(() => window.__clerkStorageWrites.length)
+    const receiptOwner = await page.locator('[data-receipt-announcer]').elementHandle()
+    await openClerk(page)
+
+    await submitReview(page, 'accept', 'no-defect', true)
+    await advanceFile(page, false, true)
+    const wrongB = await submitReview(page, 'accept', 'no-defect', true)
+    assert.match(wrongB, /Review corrected/)
+    const bChoice = page.locator('#file-b-dispensation')
+    await bChoice.check()
+    await assertContrast(page, 'File B exception draft')
+    await assertWordsFit(page, '.clerk-disposition-option span', 'File B exception control text')
+    await capture(page, 'clerk-file-b-exception-draft-320x740')
+    await advanceFile(page, false, true)
+
+    assert.equal(await page.locator('#file-c-dispensation').count(), 0, 'committed File B exception removes the C choice')
+    const cFacts = await page.locator('.clerk-evidence').innerText()
+    const wrongC = await submitReview(page, 'accept', 'no-defect', true)
+    assert.match(wrongC, /Review corrected/)
+    assert.match(await page.locator('.clerk-disposition-used').innerText(), /used on File B/i)
+    assert.equal(await page.locator('.clerk-evidence').innerText(), cFacts, 'dispensation leaves immutable document facts unchanged')
+    await advanceFile(page, true, true)
+
+    assert.match(await page.locator('.clerk-count').innerText(), /Diagnoses correct: 1\/3/)
+    const rows = await page.locator('.clerk-summary-list li').allInnerTexts()
+    assert.equal(rows.length, 3)
+    assert.equal(rows.filter((row) => row.startsWith('File A:')).length, 1)
+    assert.equal(rows.filter((row) => row.startsWith('File B:')).length, 1)
+    assert.equal(rows.filter((row) => row.startsWith('File C:')).length, 1)
+    assert.match(rows[0], /Your diagnosis: Correct[\s\S]*Final disposition: Accept - followed required procedure/)
+    assert.match(rows[1], /Your diagnosis: Needs correction[\s\S]*Your diagnosis: Accept[\s\S]*Final disposition: Accept - dispensation granted, accepted despite defect/)
+    assert.match(rows[2], /Your diagnosis: Needs correction[\s\S]*Final disposition: Return - followed required procedure/)
+    assert.match(await page.locator('.clerk-disposition-summary').innerText(), /File B - Jon Bell/)
+    await assertContrast(page, 'File B exception summary')
+    await snapshotNoOverflow(page, 'File B exception summary')
+    await capture(page, 'clerk-file-b-exception-summary-320x740')
+
+    await page.getByRole('button', { name: 'Review files again', exact: true }).click()
+    await page.getByRole('heading', { name: 'File A: Mira Vale', exact: true }).waitFor()
+    assert.equal(await page.locator('.clerk-options input:checked').count(), 0, 'repeat clears submitted diagnosis')
+    await submitReview(page, 'accept', 'no-defect', true)
+    await advanceFile(page, false, true)
+    await submitReview(page, 'return', 'copy-before-certification', true)
+    assert.equal(await page.locator('#file-b-dispensation').isChecked(), false, 'repeat resets the draft')
+    await page.locator('#file-b-dispensation').check()
+    await advanceFile(page, false, true)
+    assert.equal(await page.locator('#file-c-dispensation').count(), 0, 'a newly committed exception is reflected from finalized File B')
+    await page.getByRole('button', { name: 'Back to verdict', exact: true }).click()
+    assert.deepEqual(await verdictSnapshot(page), verdictBefore, 'exit after a committed exception preserves the verdict')
+    await openClerk(page)
+    assert.equal(await page.getByRole('heading', { name: 'File A: Mira Vale', exact: true }).count(), 1, 'reopening after committed exception starts a fresh shift')
+    assert.equal(await page.locator('.clerk-options input:checked').count(), 0)
+    await submitReview(page, 'accept', 'no-defect', true)
+    await advanceFile(page, false, true)
+    await submitReview(page, 'return', 'copy-before-certification', true)
+    assert.equal(await page.locator('#file-b-dispensation').isEnabled(), true, 'reopen resets exception allocation')
+    await page.getByRole('button', { name: 'Back to verdict', exact: true }).click()
+    assert.deepEqual(await storageSnapshot(page), storageBefore, 'training and exits preserve storage bytes')
+    assert.deepEqual(await page.evaluate((from) => window.__clerkStorageWrites.slice(from), writeCount), [], 'training performs no storage writes')
+    assert.equal(await page.locator('[data-receipt-announcer]').evaluate((element, owner) => element === owner, receiptOwner), true)
+    assert.equal((await page.locator('[data-receipt-announcer]').textContent()).trim(), verdictBefore.liveReceipt)
+    return { fixture: 'debug ending fixture', diagnosisCorrect: '1/3', exceptionBeneficiary: 'File B', rows: rows.length }
+  } finally { await closeContext(context) }
+}
+
+async function runDispensationOnFileC() {
+  const { context, page } = await openPage({ debug: true, viewport: { width: 390, height: 844 }, mobile: true })
+  try {
+    await reachDebugEnding(page)
+    const verdictBefore = await verdictSnapshot(page)
+    const storageBefore = await storageSnapshot(page)
+    const writeCount = await page.evaluate(() => window.__clerkStorageWrites.length)
+    await openClerk(page)
+    await submitReview(page, 'accept', 'no-defect', true)
+    await advanceFile(page, false, true)
+    const wrongB = await submitReview(page, 'accept', 'no-defect', true)
+    assert.match(wrongB, /Review corrected/)
+    const bChoice = page.locator('#file-b-dispensation')
+    await bChoice.check()
+    await bChoice.uncheck()
+    assert.equal(await bChoice.isChecked(), false, 'B on then off keeps the resource available')
+    await advanceFile(page, false, true)
+    const cFacts = await page.locator('.clerk-evidence').innerText()
+    const wrongC = await submitReview(page, 'accept', 'no-defect', true)
+    assert.match(wrongC, /Review corrected/)
+    assert.equal(await page.locator('.clerk-evidence').innerText(), cFacts)
+    const cChoice = page.locator('#file-c-dispensation')
+    assert.equal(await cChoice.isEnabled(), true, 'B procedure leaves C eligible')
+    await cChoice.check()
+    await assertContrast(page, 'File C exception draft')
+    await assertWordsFit(page, '.clerk-disposition-option span', 'File C exception control text')
+    await capture(page, 'clerk-file-c-exception-draft-390x844')
+    await advanceFile(page, true, true)
+
+    assert.match(await page.locator('.clerk-count').innerText(), /Diagnoses correct: 1\/3/)
+    const rows = await page.locator('.clerk-summary-list li').allInnerTexts()
+    assert.equal(rows.length, 3)
+    assert.match(rows[1], /Your diagnosis: Needs correction[\s\S]*Final disposition: Return - followed required procedure/)
+    assert.match(rows[2], /Your diagnosis: Needs correction[\s\S]*Your diagnosis: Accept[\s\S]*Final disposition: Accept - dispensation granted, accepted despite defect/)
+    assert.match(await page.locator('.clerk-disposition-summary').innerText(), /File C - Neri Sol/)
+    await assertContrast(page, 'File C exception summary')
+    await snapshotNoOverflow(page, 'File C exception summary')
+    await capture(page, 'clerk-file-c-exception-summary-390x844')
+    await page.locator('.clerk-summary-actions').getByRole('button', { name: 'Back to verdict', exact: true }).click()
+    assert.deepEqual(await verdictSnapshot(page), verdictBefore)
+    await openClerk(page)
+    assert.equal(await page.getByRole('heading', { name: 'File A: Mira Vale', exact: true }).count(), 1, 'exit after committed C exception resets the desk')
+    assert.deepEqual(await storageSnapshot(page), storageBefore)
+    assert.deepEqual(await page.evaluate((from) => window.__clerkStorageWrites.slice(from), writeCount), [])
+    return { fixture: 'debug ending fixture', diagnosisCorrect: '1/3', exceptionBeneficiary: 'File C', rows: rows.length }
+  } finally { await closeContext(context) }
+}
+
+async function runDraftExit() {
+  const { context, page } = await openPage({ debug: true, viewport: { width: 320, height: 740 }, mobile: true })
+  try {
+    await reachDebugEnding(page)
+    const verdictBefore = await verdictSnapshot(page)
+    const storageBefore = await storageSnapshot(page)
+    const writeCount = await page.evaluate(() => window.__clerkStorageWrites.length)
+    await openClerk(page)
+    await submitReview(page, 'accept', 'no-defect', true)
+    await advanceFile(page, false, true)
+    await submitReview(page, 'return', 'copy-before-certification', true)
+    await page.locator('#file-b-dispensation').check()
+    await page.getByRole('button', { name: 'Back to verdict', exact: true }).click()
+    assert.deepEqual(await verdictSnapshot(page), verdictBefore, 'exit with an uncommitted draft preserves the verdict')
+    await openClerk(page)
+    assert.equal(await page.getByRole('heading', { name: 'File A: Mira Vale', exact: true }).count(), 1)
+    assert.equal(await page.locator('.clerk-options input:checked').count(), 0)
+    await submitReview(page, 'accept', 'no-defect', true)
+    await advanceFile(page, false, true)
+    await submitReview(page, 'return', 'copy-before-certification', true)
+    assert.equal(await page.locator('#file-b-dispensation').isChecked(), false, 'draft does not survive exit/reopen')
+    await page.getByRole('button', { name: 'Back to verdict', exact: true }).click()
+    assert.deepEqual(await storageSnapshot(page), storageBefore)
+    assert.deepEqual(await page.evaluate((from) => window.__clerkStorageWrites.slice(from), writeCount), [])
+    return { fixture: 'debug ending fixture', draftReset: true }
   } finally { await closeContext(context) }
 }
 
@@ -510,19 +691,21 @@ async function runTextScaleFocus() {
     ]
     for (let index = 0; index < answers.length; index += 1) {
       const [file, decision, reason] = answers[index]
-      await page.locator(`#file-${file}-decision-${decision}`).check()
-      await page.locator(`#file-${file}-reason-${reason}`).check()
-      await page.getByRole('button', { name: 'Record decision', exact: true }).click()
-      await page.locator('[data-clerk-announcer] h3').waitFor()
-      const feedback = await page.locator('[data-clerk-announcer]').innerText()
+      const feedback = await submitReview(page, decision, reason, false, { allowFeedbackScroll: true })
       assert.match(feedback, /Correct review/)
       assert.match(feedback, new RegExp(`File ${file.toUpperCase()}: review recorded\\.`))
       await assertWordsFit(page, '.clerk-feedback h3, .clerk-feedback p', `320x740 200% File ${file.toUpperCase()} feedback`)
+      if (file !== 'a') {
+        await assertWordsFit(page, '.clerk-disposition-option span, .clerk-disposition p', `320x740 200% File ${file.toUpperCase()} disposition`)
+        const label = await page.locator('.clerk-disposition-option').boundingBox()
+        assert.ok(label && label.width >= 44 && label.height >= 44, `200% disposition label target below 44px: ${JSON.stringify(label)}`)
+        await assertContrast(page, `320x740 200% File ${file.toUpperCase()} disposition`)
+      }
       if (index === 0) {
         await page.locator('.clerk-feedback').scrollIntoViewIfNeeded()
         await capture(page, 'clerk-feedback-200-text-read-scroll-320x740')
       }
-      await page.getByRole('button', { name: index === answers.length - 1 ? 'Finish shift' : 'Next file', exact: true }).click()
+      await advanceFile(page, index === answers.length - 1)
     }
     await page.getByRole('heading', { name: 'Training complete', exact: true }).waitFor()
     assert.equal(await page.evaluate(() => document.activeElement?.id === 'clerk-summary-title'), true, '200% text summary heading receives production focus')
@@ -539,6 +722,9 @@ try {
     await scenario('debug fixture sees Acting Clerk only after an ending', runEntryRed)
   } else {
     await scenario('normal no-debug ending, 3/3 correct, no global/storage mutation, exit/repeat/share/restart', runNaturalInvariantJourney)
+    await scenario('debug fixture: File B exception is allocated on Next, scored diagnosis stays wrong, C unavailable, repeat/exit reset allocation', runDispensationOnFileB)
+    await scenario('debug fixture: B draft on/off leaves File C eligible; C exception finalizes independently of wrong diagnosis', runDispensationOnFileC)
+    await scenario('debug fixture: uncommitted disposition draft is discarded on exit/reopen', runDraftExit)
     await scenario('debug fixture: 0/3 and wrong decision plus wrong reason', () => runDebugOutcome('all-wrong', [
       ['return', 'copy-after-redaction'],
       ['accept', 'no-defect'],

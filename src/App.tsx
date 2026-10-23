@@ -22,6 +22,8 @@ import type { WordChoiceData } from './game/puzzles/wordChoice'
 import { evalChoice } from './game/puzzles/wordChoice'
 import type { StampAction, StampsData } from './game/puzzles/stamps'
 import { evaluateDocuments } from './game/puzzles/stamps'
+import { EVIDENCE_DOCUMENTS, evaluateEvidence, type EvidenceId } from './game/puzzles/evidence'
+import { applySuspicion } from './game/suspicion'
 import type { EndingId, GameState, LastVerdict, RoundResult, VerdictMeasures } from './game/types'
 
 function formatTime(sec: number) {
@@ -268,27 +270,30 @@ export default function App() {
           <h1>Captcha Hell</h1>
           {round && <Puzzle round={round} state={state} timeLeft={timeLeft} submit={submit} dispatch={dispatch} reduceMotion={reduceMotion} />}
           {round && (
-            <div className="appeal">
-              <button
-                disabled={state.appealUsed || state.score < 50 || state.suspicion <= 0}
-                aria-describedby="appeal-status"
-                onClick={() => {
-                  dispatch({ type: 'APPEAL_VERDICT' })
-                }}
-              >Appeal verdict</button>
-              <p className="hint">Cost: 50 points. Removes up to 20 suspicion, clamped at zero.</p>
-              <p id="appeal-status" className="hint">
-                {state.appealUsed
-                  ? 'Already used this run.'
-                  : state.score < 50 && state.suspicion <= 0
-                    ? 'Unavailable: need at least 50 points and suspicion above zero.'
-                    : state.score < 50
-                      ? 'Unavailable: need at least 50 points.'
-                      : state.suspicion <= 0
-                        ? 'Unavailable: no suspicion to remove.'
-                        : 'Available once per run.'}
-              </p>
-            </div>
+            <section className="appeal" aria-label="Appeal options">
+              <div className="appeal-option">
+                <button
+                  disabled={state.appealUsed || state.score < 50 || state.suspicion <= 0}
+                  aria-describedby="appeal-suspicion-status"
+                  onClick={() => dispatch({ type: 'APPEAL_VERDICT', relief: 'suspicion' })}
+                >Appeal: suspicion relief</button>
+                <p className="hint">Cost: 50 points. Removes up to 20 suspicion, clamped at zero.</p>
+                <p id="appeal-suspicion-status" className="hint">
+                  {state.appealUsed ? 'Unavailable: this run’s Appeal is already used.' : state.score < 50 ? 'Unavailable: need at least 50 points.' : state.suspicion <= 0 ? 'Unavailable: no suspicion to remove.' : 'Available once per run.'}
+                </p>
+              </div>
+              <div className="appeal-option">
+                <button
+                  disabled={state.appealUsed || state.score < 50 || state.strikes !== 2}
+                  aria-describedby="appeal-strike-status"
+                  onClick={() => dispatch({ type: 'APPEAL_VERDICT', relief: 'strike' })}
+                >Appeal: strike relief</button>
+                <p className="hint">Cost: 50 points. Removes exactly one strike, only from two to one.</p>
+                <p id="appeal-strike-status" className="hint">
+                  {state.appealUsed ? 'Unavailable: this run’s Appeal is already used.' : state.score < 50 ? 'Unavailable: need at least 50 points.' : state.strikes !== 2 ? 'Unavailable: strike relief requires exactly two strikes.' : 'Available once per run.'}
+                </p>
+              </div>
+            </section>
           )}
           <VerdictReceipt verdict={state.lastVerdict} />
         </section>
@@ -386,6 +391,7 @@ function Meter({ label, value, max, danger, plain, blue }: { label: string; valu
 
 function Puzzle({ round, state, timeLeft, submit, dispatch, reduceMotion }: { round: ReturnType<typeof getRound>; state: GameState; timeLeft: number; submit: (r: RoundResult, identity?: { round: number; attempt: number }) => void; dispatch: React.Dispatch<any>; reduceMotion: boolean }) {
   if (round.type === 'grid') return <GridPuzzle roundId={round.id} data={round.data as GridData} timeLeft={timeLeft} submit={submit} />
+  if (round.type === 'evidence') return <EvidencePuzzle state={state} timeLeft={timeLeft} submit={submit} />
   if (round.type === 'checkbox') return <CheckboxPuzzle data={round.data as CheckboxData} timeLeft={timeLeft} submit={submit} reduceMotion={reduceMotion} />
   if (round.type === 'timedClick') return <TimedClick data={round.data as TimedClickData} attempt={state.attempt} timeLeft={timeLeft} submit={submit} />
   if (round.type === 'slider') return <SliderPuzzle data={round.data as SliderData} attempt={state.attempt} timeLeft={timeLeft} submit={submit} />
@@ -399,6 +405,43 @@ function GridPuzzle({ roundId, data, timeLeft, submit }: { roundId: number; data
   const [selected, setSelected] = useState<number[]>([])
   const toggle = (i: number) => setSelected((s) => s.includes(i) ? s.filter((x) => x !== i) : [...s, i])
   return <div><h2>{data.prompt}</h2>{roundId === 3 && <p className="hint interpretation-cue">Your interpretation will be kept on file.</p>}<div className="grid">{data.cells.map((cell, i) => <button className={selected.includes(i) ? 'cell active' : 'cell'} key={i} onClick={() => toggle(i)} aria-pressed={selected.includes(i)}><span>{cell.icon}</span><small>{cell.label ?? `tile ${i + 1}`}</small></button>)}</div><button className="primary wide" onClick={() => { const r = validateGrid(selected, data.correct, data.ambiguous); submit({ ...r, timeLeftSec: timeLeft, strikeSource: 'wrongSubmit' }) }}>Verify selection</button>{data.failCopy && <p className="hint">{data.failCopy}</p>}</div>
+}
+
+function EvidencePuzzle({ state, timeLeft, submit }: { state: GameState; timeLeft: number; submit: (r: RoundResult, identity?: { round: number; attempt: number }) => void }) {
+  const [selected, setSelected] = useState<EvidenceId[]>([])
+  const evaluation = evaluateEvidence(selected)
+  const optionalCount = selected.filter((id) => id !== 'existence-declaration').length
+  const afterTiming = timeLeft < 4
+    ? applySuspicion(state.suspicion, 'slowAnswer')
+    : timeLeft >= 10 && state.attempt === 0
+      ? applySuspicion(state.suspicion, 'cleanFastPass')
+      : state.suspicion
+  const previewSuspicion = Math.min(100, afterTiming + (evaluation.valid ? evaluation.attachmentCount : 0) * 15)
+  const toggle = (id: EvidenceId) => setSelected((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id])
+
+  return <div className="evidence-puzzle">
+    <h2>File the minimum evidence needed to establish that you exist.</h2>
+    <p className="hint evidence-instructions">Choose the required declaration. Optional attachments add score and suspicion only when the filing is valid. Your selections stay local until filing.</p>
+    <fieldset className="evidence-options">
+      <legend>Available fictional documents</legend>
+      {EVIDENCE_DOCUMENTS.map((document) => (
+        <label className="evidence-option" key={document.id}>
+          <input type="checkbox" checked={selected.includes(document.id)} onChange={() => toggle(document.id)} />
+          <span>{document.label}{document.required ? ' (required)' : ' (optional)'}</span>
+        </label>
+      ))}
+    </fieldset>
+    <div className="evidence-preview" aria-live="polite">
+      <p>Selected optional extras: {optionalCount} of 2.</p>
+      <p>Extra effect on a valid filing: +{optionalCount * 40} score and +{optionalCount * 15} suspicion, on top of the ordinary pass and timing effects.</p>
+      {!evaluation.valid && <p className="evidence-warning">A valid filing must include the required existence declaration. Filing now will count as a wrong submission.</p>}
+      {evaluation.valid && previewSuspicion >= 100 && <p className="evidence-warning">At the current timer reading, this valid filing would flag the run.</p>}
+      <p>Suspicion reaching 100 ends the run as Flagged.</p>
+      <p className="evidence-timing">Current timer: {timeLeft}s. Timing can still change before filing; the timer keeps running.</p>
+    </div>
+    <p className="hint evidence-disclaimer">Theater only. These documents are fictional; no device files, camera, clipboard, or permissions are accessed.</p>
+    <button className="primary wide" onClick={() => submit({ passed: evaluation.valid, timeLeftSec: timeLeft, evidenceIds: selected, strikeSource: 'wrongSubmit' }, { round: 9, attempt: state.attempt })}>File evidence</button>
+  </div>
 }
 
 function CheckboxPuzzle({ data, timeLeft, submit, reduceMotion }: { data: CheckboxData; timeLeft: number; submit: (r: RoundResult) => void; reduceMotion: boolean }) {

@@ -21,7 +21,7 @@ describe('rounds data', () => {
 
   it('covers all required puzzle types', () => {
     const types = new Set(ROUNDS.map((r) => r.type))
-    for (const t of ['grid', 'checkbox', 'timedClick', 'slider', 'stamps', 'wordChoice', 'recall', 'final']) {
+    for (const t of ['grid', 'checkbox', 'timedClick', 'slider', 'stamps', 'wordChoice', 'recall', 'evidence', 'final']) {
       expect(types.has(t as never)).toBe(true)
     }
   })

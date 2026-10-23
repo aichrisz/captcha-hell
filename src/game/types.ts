@@ -8,6 +8,7 @@ export type PuzzleType =
   | 'stamps'
   | 'wordChoice'
   | 'recall'
+  | 'evidence'
   | 'final'
 
 export type EndingId = 'verified' | 'probablyHuman' | 'ghost' | 'rejected' | 'flagged' | 'tooPerfect'
@@ -65,6 +66,7 @@ export interface RoundResult {
   count?: number
   ambiguousChoice?: AmbiguousChoice
   strikeSource?: StrikeSource   // required when passed is false
+  evidenceIds?: readonly string[]
 }
 
 export interface GameState {
@@ -84,6 +86,8 @@ export interface GameState {
   finalChoice?: FinalChoice
 }
 
+export type AppealRelief = 'suspicion' | 'strike'
+
 export type Action =
   | { type: 'START_RUN' }
   | { type: 'SUBMIT_ROUND'; result: RoundResult; identity?: { round: number; attempt: number } }
@@ -96,5 +100,5 @@ export type Action =
   | { type: 'END_RUN'; ending: EndingId }
   | { type: 'RESTART' }
   | { type: 'SOUND_TOGGLE' }
-  | { type: 'APPEAL_VERDICT' }
+  | { type: 'APPEAL_VERDICT'; relief?: AppealRelief }
   | { type: 'DEBUG_SET'; patch: Partial<GameState> }

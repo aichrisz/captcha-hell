@@ -253,9 +253,11 @@ async function runJourney(page, options) {
   if (auditNoop) {
     const previousReceipt = await receiptText(page)
     const before = await receiptChanges(page)
-    const appeal = page.locator('.appeal button')
-    assert.equal(await appeal.isDisabled(), true, 'appeal is unavailable with no suspicion')
-    await appeal.evaluate((button) => button.click())
+    const appeals = page.locator('.appeal button')
+    assert.equal(await appeals.count(), 2)
+    assert.equal(await appeals.nth(0).isDisabled(), true, 'suspicion appeal is unavailable with no suspicion')
+    assert.equal(await appeals.nth(1).isDisabled(), true, 'strike appeal is unavailable without two strikes')
+    await appeals.nth(0).evaluate((button) => button.click())
     const flavorBefore = await page.locator('.flavor').textContent()
     await page.getByRole('button', { name: 'Sound on', exact: true }).click()
     await page.clock.runFor(5000)
@@ -336,10 +338,10 @@ async function runJourney(page, options) {
     return { trace, receiptSequence: sequence }
   }
 
-  for (let index = 0; index < 9; index += 1) await page.locator('.cell').nth(index).click()
-  await page.getByRole('button', { name: 'Verify selection', exact: true }).click()
+  await page.getByRole('checkbox', { name: 'Existence declaration (required)', exact: true }).check()
+  await page.getByRole('button', { name: 'File evidence', exact: true }).click()
   await waitReceipt(page, ++sequence)
-  trace.push({ round: 9, action: 'submit all nine tiles' })
+  trace.push({ round: 9, action: 'mandatory-only evidence filing' })
   await assertRound(page, 10)
 
   if (textScale200) await page.addStyleTag({ content: 'html { font-size: 32px !important; }' })
@@ -616,12 +618,12 @@ async function runAppealClamp() {
   for (const index of [0, 4, 7]) await page.locator('.cell').nth(index).click()
   await page.getByRole('button', { name: 'Verify selection', exact: true }).click()
   await waitReceipt(page, 2)
-  const appeal = page.getByRole('button', { name: 'Appeal verdict', exact: true })
+  const appeal = page.getByRole('button', { name: 'Appeal: suspicion relief', exact: true })
   assert.equal(await appeal.isEnabled(), true)
   await appeal.click()
   await waitReceipt(page, 3)
   const text = await receiptText(page)
-  assert.match(text, /^Receipt 3: Appeal accepted\. Round 2\. Score -50\. Suspicion -10\.$/)
+  assert.match(text, /^Receipt 3: Appeal accepted: suspicion relief\. Round 2\. Score -50\. Suspicion -10\.$/)
   const changes = await receiptChanges(page)
   await appeal.evaluate((button) => button.click())
   assert.equal(await receiptText(page), text, 'denied second appeal does not alter the receipt')

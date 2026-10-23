@@ -118,7 +118,7 @@ try {
     await assertHud(page, 2, '17s', 1)
     await page.getByRole('button', { name: 'Sound on', exact: true }).click()
     await assertHud(page, 2, '17s', 1)
-    const appeal = page.getByRole('button', { name: 'Appeal verdict', exact: true })
+    const appeal = page.getByRole('button', { name: 'Appeal: suspicion relief', exact: true })
     assert.equal(await appeal.isEnabled(), true, 'appeal is available after score and retry suspicion')
     await appeal.click()
     await assertHud(page, 2, '17s', 1)

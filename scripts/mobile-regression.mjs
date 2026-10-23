@@ -42,7 +42,7 @@ const debugURL = () => {
   return url.toString()
 }
 
-async function openPage({ viewport, mode = 'full', clock = false, mobile = false } = {}) {
+async function openPage({ viewport, mode = 'full', clock = false, mobile = false, debug = true } = {}) {
   const page = await browser.newPage({
     viewport: { width: viewport.width, height: viewport.height },
     reducedMotion: mode === 'reduced' ? 'reduce' : 'no-preference',
@@ -55,7 +55,7 @@ async function openPage({ viewport, mode = 'full', clock = false, mobile = false
     if (message.type() === 'error') pageErrors.push(message.text())
   })
   if (clock) await page.clock.install()
-  await page.goto(debugURL())
+  await page.goto(debug ? debugURL() : baseURL)
   return page
 }
 
@@ -179,7 +179,7 @@ async function assertControlVisible(page, selector, label) {
   return box
 }
 
-async function assertControlTargets(page, label, selector = '.widget button:not(:disabled), .widget input') {
+async function assertControlTargets(page, label, selector = '.widget button:not(:disabled), .widget input:not([type="checkbox"]), .evidence-option') {
   const boxes = await page.locator(selector).evaluateAll((elements) => elements.map((element) => {
     const r = element.getBoundingClientRect()
     return { text: element.innerText || element.getAttribute('aria-label') || element.tagName, width: r.width, height: r.height }
@@ -282,9 +282,9 @@ async function playPerfectRun(page) {
   await dismissPopups(page)
   await page.getByRole('button', { name: 'I treated it as a poster', exact: true }).click()
   await dismissPopups(page)
-  for (let i = 0; i < 9; i += 1) await page.locator('.cell').nth(i).click()
+  await page.getByRole('checkbox', { name: 'Existence declaration (required)', exact: true }).check()
   await dismissPopups(page)
-  await page.getByRole('button', { name: 'Verify selection', exact: true }).click()
+  await page.getByRole('button', { name: 'File evidence', exact: true }).click()
   await dismissPopups(page)
   const box = page.locator('.final-box')
   await box.click(); await box.click(); await box.click()
@@ -293,6 +293,43 @@ async function playPerfectRun(page) {
 }
 
 try {
+  await scenario('natural Appeal UI guard reasons: insufficient funds, wrong strike count, and shared-use lockout', async () => {
+    const page = await openPage({ viewport: viewports[1], mode: 'reduced', mobile: true, debug: false })
+    try {
+      await begin(page)
+      const suspicionAppeal = page.getByRole('button', { name: 'Appeal: suspicion relief', exact: true })
+      const strikeAppeal = page.getByRole('button', { name: 'Appeal: strike relief', exact: true })
+      assert.equal(await suspicionAppeal.isDisabled(), true)
+      assert.equal(await strikeAppeal.isDisabled(), true)
+      assert.match(await page.locator('#appeal-suspicion-status').innerText(), /need at least 50 points/i)
+      assert.match(await page.locator('#appeal-strike-status').innerText(), /need at least 50 points/i)
+      await capture(page, '390x844-natural-appeal-insufficient-funds')
+
+      await page.locator('.cell').nth(1).click()
+      await page.getByRole('button', { name: 'Verify selection', exact: true }).click()
+      await page.locator('.cell').nth(1).click()
+      for (const index of [0, 4, 7]) await page.locator('.cell').nth(index).click()
+      await page.getByRole('button', { name: 'Verify selection', exact: true }).click()
+      await page.getByRole('heading', { name: 'Confirm you are not a robot.', exact: true }).waitFor()
+      const score = Number((await page.locator('.hud .stat').nth(0).innerText()).split('\n')[1])
+      const suspicion = Number((await page.locator('.hud .stat').nth(1).innerText()).split('\n')[1])
+      const strikes = Number((await page.locator('.hud .stat').nth(3).innerText()).split('\n')[1])
+      assert.ok(score >= 50 && suspicion > 0 && strikes === 1, 'natural mistake/retry creates an admitted Appeal state with one strike')
+      assert.equal(await suspicionAppeal.isEnabled(), true)
+      assert.equal(await strikeAppeal.isDisabled(), true, 'one strike is not eligible for strike relief despite sufficient score')
+      assert.match(await page.locator('#appeal-strike-status').innerText(), /requires exactly two strikes/i)
+      assert.match(await page.locator('#appeal-suspicion-status').innerText(), /Available once per run/i)
+      await capture(page, '390x844-natural-appeal-wrong-strike-count')
+
+      await suspicionAppeal.click()
+      assert.equal(await suspicionAppeal.isDisabled(), true)
+      assert.equal(await strikeAppeal.isDisabled(), true)
+      assert.match(await page.locator('#appeal-suspicion-status').innerText(), /already used/i)
+      assert.match(await page.locator('#appeal-strike-status').innerText(), /already used/i)
+      await capture(page, '390x844-natural-appeal-shared-use-lockout')
+    } finally { await closePage(page) }
+  })
+
   await scenario('matrix: requested viewport geometry, all ten puzzles, motion modes, targets, and screenshots', async () => {
     const puzzleScreens = new Set([1, 2, 4, 6, 9, 10])
     for (const viewport of viewports) {
@@ -398,7 +435,7 @@ try {
           if (puzzleScreens.has(round) && round !== 2 && round !== 10 && (viewport.width <= 520 || viewport.height <= 520)) {
             await capture(page, `${viewport.name}-${mode}-round${round}`, { mode, round })
           }
-          if ([1, 3, 9].includes(round)) {
+          if ([1, 3].includes(round)) {
             const cells = await page.locator('.cell').evaluateAll((elements) => elements.map((element) => {
               const r = element.getBoundingClientRect()
               const label = element.querySelector('small')
@@ -422,6 +459,21 @@ try {
               assert.ok(verify && verify.y + verify.height <= viewport.height, `${viewport.width}px: first grid Verify fits on entry: ${JSON.stringify(verify)}`)
             }
           }
+          if (round === 9) {
+            const labels = await page.locator('.evidence-option').evaluateAll((elements) => elements.map((element) => {
+              const r = element.getBoundingClientRect()
+              const text = element.querySelector('span')
+              return { width: r.width, height: r.height, textWidth: text?.getBoundingClientRect().width ?? 0, overflow: Boolean(text && text.scrollWidth > text.clientWidth + 1) }
+            }))
+            assert.equal(labels.length, 3, `${viewport.name} ${mode}: three evidence labels render`)
+            assert.ok(labels.every((label) => label.width >= 44 && label.height >= 44 && label.textWidth > 90 && !label.overflow), `${viewport.name} ${mode}: evidence labels remain target-sized and readable: ${JSON.stringify(labels)}`)
+            assert.match(await page.locator('.evidence-preview').innerText(), /0 of 2.*\+0 score and \+0 suspicion/s)
+            assert.equal(await page.locator('.evidence-option input[type="checkbox"]').count(), 3)
+            const file = await page.getByRole('button', { name: 'File evidence', exact: true }).boundingBox()
+            assert.ok(file && file.width >= 44 && file.height >= 44, `${viewport.name} ${mode}: filing target meets 44px: ${JSON.stringify(file)}`)
+            await assertTimerVisible(page, `${viewport.name} ${mode} evidence choices`)
+            await assertRequestedWidth(page, `${viewport.name} ${mode} evidence labels`)
+          }
           if (round === 6) {
             assert.equal((await page.locator('.hud .stat').nth(5).innerText()).split('\n')[1], 'untimed', `${viewport.name} ${mode}: stamp round is visibly untimed`)
             assert.equal(await page.locator('.document-card').count(), 2, `${viewport.name} ${mode}: Original and Copy are both displayed`)
@@ -433,10 +485,18 @@ try {
             const appeal = page.locator('.appeal')
             const appealBox = await appeal.boundingBox()
             const copy = await appeal.innerText()
-            assert.ok(appealBox && appealBox.height <= 120, `${viewport.name}: Appeal occupies ${appealBox?.height}px, over the 120px target`)
+            const actions = await appeal.locator('button').evaluateAll((elements) => elements.map((element) => {
+              const r = element.getBoundingClientRect()
+              return { x: r.x, y: r.y, right: r.right, bottom: r.bottom, width: r.width, height: r.height }
+            }))
+            assert.ok(appealBox && actions.length === 2, `${viewport.name}: both Appeal actions render`)
+            assert.ok(actions.every((action) => action.width >= 44 && action.height >= 44), `${viewport.name}: both Appeal targets meet 44px: ${JSON.stringify(actions)}`)
+            assert.ok(actions[0].bottom <= actions[1].y + 1 || actions[1].bottom <= actions[0].y + 1, `${viewport.name}: Appeal actions overlap: ${JSON.stringify(actions)}`)
             assert.match(copy, /50 points/i)
             assert.match(copy, /up to 20 suspicion/i)
-            assert.match(copy, /Unavailable|Available|Already used/i)
+            assert.match(copy, /exactly one strike/i)
+            assert.match(copy, /only from two to one/i)
+            await assertTimerVisible(page, `${viewport.name}: stacked Appeal layout`)
           }
         }
         await closePage(page)
@@ -552,9 +612,9 @@ try {
           await assertTimerVisible(page, `${viewport.name} ${mode} popup dismissal`)
         }
         assert.equal(await page.locator('.popup').count(), 0)
-        const firstCell = page.locator('.cell').first()
-        await firstCell.click()
-        assert.equal(await firstCell.getAttribute('aria-pressed'), 'true', `${viewport.name} ${mode}: dismissing notices restores puzzle interaction`)
+        const requiredEvidence = page.getByRole('checkbox', { name: 'Existence declaration (required)', exact: true })
+        await requiredEvidence.check()
+        assert.equal(await requiredEvidence.isChecked(), true, `${viewport.name} ${mode}: dismissing notices restores evidence selection interaction`)
         await assertRequestedWidth(page, `${viewport.name} ${mode} popups`)
         await capture(page, `${viewport.name}-${mode}-popup-dismissed`, { mode, round: 9, dismissed: 4 })
         await closePage(page)
@@ -729,8 +789,16 @@ try {
       await assertRequestedWidth(page, `${viewport.name} checkbox 200% text`)
       await assertControlTargets(page, `${viewport.name} checkbox 200% text`)
       const appeal = page.locator('.appeal')
-      assert.match(await appeal.innerText(), /50 points/i, 'Appeal cost remains explicit at 200% text')
-      assert.match(await appeal.innerText(), /suspicion/i, 'Appeal effect/eligibility remains explicit at 200% text')
+      const appealCopy = await appeal.innerText()
+      assert.equal(await appeal.locator('button').count(), 2, 'both Appeal actions remain visible at 200% text')
+      assert.match(appealCopy, /50 points/i, 'Appeal cost remains explicit at 200% text')
+      assert.match(appealCopy, /up to 20 suspicion/i, 'suspicion effect/eligibility remains explicit at 200% text')
+      assert.match(appealCopy, /exactly one strike.*only from two to one/s, 'strike effect/eligibility remains explicit at 200% text')
+      const appealButtons = await appeal.locator('button').evaluateAll((elements) => elements.map((element) => {
+        const r = element.getBoundingClientRect()
+        return { width: r.width, height: r.height }
+      }))
+      assert.ok(appealButtons.every((box) => box.width >= 44 && box.height >= 44), `both Appeal actions meet 44px at 200% text: ${JSON.stringify(appealButtons)}`)
       await capture(page, `${viewport.name}-200-text-appeal`, { mode: 'reduced', textScale: 2 })
       for (let round = 3; round <= 7; round += 1) await page.getByRole('button', { name: 'Next round', exact: true }).dispatchEvent('click')
       await dismissPopups(page)
@@ -739,6 +807,14 @@ try {
       const choices = await page.locator('.choices button').evaluateAll((elements) => elements.map((element) => ({ scrollWidth: element.scrollWidth, clientWidth: element.clientWidth })))
       assert.ok(choices.every((choice) => choice.scrollWidth <= choice.clientWidth + 1), `${viewport.name}: word choices clip at 200% text: ${JSON.stringify(choices)}`)
       await capture(page, `${viewport.name}-200-text-word-choices`, { mode: 'reduced', textScale: 2, round: 7 })
+      for (const round of [8, 9]) await page.getByRole('button', { name: 'Next round', exact: true }).dispatchEvent('click')
+      await dismissPopups(page)
+      await assertRequestedWidth(page, `${viewport.name} evidence 200% text`)
+      await assertControlTargets(page, `${viewport.name} evidence 200% text`)
+      const evidenceText = await page.locator('.evidence-puzzle').innerText()
+      assert.match(evidenceText, /required.*optional/s)
+      assert.match(evidenceText, /Theater only.*fictional/s)
+      await capture(page, `${viewport.name}-200-text-evidence`, { mode: 'reduced', textScale: 2, round: 9 })
       await closePage(page)
     }
     const desktop = await openPage({ viewport: viewports[4], mode: 'full' })

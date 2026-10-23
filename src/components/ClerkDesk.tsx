@@ -1,11 +1,16 @@
 import { useLayoutEffect, useRef, useState, type FormEvent } from 'react'
 import { CLERK_CASES, CLERK_DECISIONS, CLERK_REASONS, isCorrectClerkReview, type ClerkDecision, type ClerkReasonId } from '../game/clerk'
 
-interface RecordedReview {
+interface ReviewSubmission {
   readonly caseId: string
   readonly decision: ClerkDecision
   readonly reason: ClerkReasonId
   readonly correct: boolean
+}
+
+interface RecordedReview extends ReviewSubmission {
+  readonly disposition: ClerkDecision
+  readonly exception: boolean
 }
 
 interface ClerkDeskProps {
@@ -23,20 +28,26 @@ export default function ClerkDesk({ reduceMotion, onExit }: ClerkDeskProps) {
   const [caseIndex, setCaseIndex] = useState(0)
   const [decision, setDecision] = useState<ClerkDecision | ''>('')
   const [reason, setReason] = useState<ClerkReasonId | ''>('')
-  const [submission, setSubmission] = useState<RecordedReview | null>(null)
+  const [submission, setSubmission] = useState<ReviewSubmission | null>(null)
   const [records, setRecords] = useState<RecordedReview[]>([])
+  const [grantDispensation, setGrantDispensation] = useState(false)
   const [summary, setSummary] = useState(false)
   const submitted = useRef(false)
+  const committedCase = useRef<string | null>(null)
   const caseHeading = useRef<HTMLHeadingElement>(null)
   const summaryHeading = useRef<HTMLHeadingElement>(null)
   const nextFile = useRef<HTMLButtonElement>(null)
+  const dispensationChoice = useRef<HTMLInputElement>(null)
   const clerkCase = CLERK_CASES[caseIndex]
+  const exceptionRecord = records.find((record) => record.exception)
+  const canGrantDispensation = Boolean(clerkCase?.correctDecision === 'return' && !exceptionRecord)
 
   useLayoutEffect(() => {
     if (summary) summaryHeading.current?.focus()
+    else if (submission && canGrantDispensation) dispensationChoice.current?.focus()
     else if (submission) nextFile.current?.focus()
     else caseHeading.current?.focus()
-  }, [caseIndex, submission, summary])
+  }, [caseIndex, submission, summary, canGrantDispensation])
 
   const recordDecision = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -49,11 +60,18 @@ export default function ClerkDesk({ reduceMotion, onExit }: ClerkDeskProps) {
       correct: isCorrectClerkReview(clerkCase.id, decision, reason),
     }
     setSubmission(record)
-    setRecords((previous) => [...previous, record])
   }
 
   const advance = () => {
-    if (!submission) return
+    if (!clerkCase || !submission || submission.caseId !== clerkCase.id || committedCase.current === clerkCase.id) return
+    committedCase.current = clerkCase.id
+    const exception = clerkCase.id !== 'file-a' && canGrantDispensation && grantDispensation
+    const finalized: RecordedReview = {
+      ...submission,
+      disposition: exception ? 'accept' : clerkCase.correctDecision,
+      exception,
+    }
+    setRecords((previous) => [...previous, finalized])
     if (caseIndex === CLERK_CASES.length - 1) {
       setSubmission(null)
       setSummary(true)
@@ -62,15 +80,18 @@ export default function ClerkDesk({ reduceMotion, onExit }: ClerkDeskProps) {
     submitted.current = false
     setDecision('')
     setReason('')
+    setGrantDispensation(false)
     setSubmission(null)
     setCaseIndex((current) => current + 1)
   }
 
   const restart = () => {
     submitted.current = false
+    committedCase.current = null
     setCaseIndex(0)
     setDecision('')
     setReason('')
+    setGrantDispensation(false)
     setSubmission(null)
     setRecords([])
     setSummary(false)
@@ -156,6 +177,29 @@ export default function ClerkDesk({ reduceMotion, onExit }: ClerkDeskProps) {
               {!decision || !reason ? <p className="clerk-hint">Choose both a decision and a reason before recording this file.</p> : null}
               {!submission && <button className="primary" type="submit" disabled={!decision || !reason}>Record decision</button>}
             </form>
+            {submission && clerkCase.id !== 'file-a' && (
+              <fieldset className="clerk-disposition">
+                <legend>Disposition for {clerkCase.label}</legend>
+                {canGrantDispensation ? (
+                  <>
+                    <label className="clerk-disposition-option" htmlFor={`${clerkCase.id}-dispensation`}>
+                      <input
+                        ref={dispensationChoice}
+                        id={`${clerkCase.id}-dispensation`}
+                        type="checkbox"
+                        checked={grantDispensation}
+                        aria-describedby={`${clerkCase.id}-dispensation-help`}
+                        onChange={(event) => setGrantDispensation(event.currentTarget.checked)}
+                      />
+                      <span>Grant one-time dispensation: accept despite the defect.</span>
+                    </label>
+                    <p id={`${clerkCase.id}-dispensation-help`} className="clerk-hint">Unchecked follows the required Return procedure. Your diagnosis remains scored as recorded.</p>
+                  </>
+                ) : (
+                  <p className="clerk-disposition-used" role="status">Unavailable: the one-time dispensation was used on {exceptionRecord?.caseId === 'file-b' ? 'File B' : 'another file'}. File C follows the required Return procedure.</p>
+                )}
+              </fieldset>
+            )}
           </>
         )}
 
@@ -176,16 +220,18 @@ export default function ClerkDesk({ reduceMotion, onExit }: ClerkDeskProps) {
           <section className="clerk-summary" aria-labelledby="clerk-summary-title">
             <p className="clerk-progress">Shift summary</p>
             <h2 ref={summaryHeading} id="clerk-summary-title" tabIndex={-1}>Training complete</h2>
-            <p className="clerk-count">Reviews correct: {records.filter((record) => record.correct).length}/3</p>
+            <p className="clerk-count">Diagnoses correct: {records.filter((record) => record.correct).length}/3</p>
+            <p className="clerk-disposition-summary">Dispensation beneficiary: {exceptionRecord ? `${CLERK_CASES.find((item) => item.id === exceptionRecord.caseId)?.label} - ${CLERK_CASES.find((item) => item.id === exceptionRecord.caseId)?.applicant}` : 'None; the exception remains unused'}.</p>
             <ol className="clerk-summary-list">
               {CLERK_CASES.map((item) => {
                 const record = records.find((entry) => entry.caseId === item.id)
                 return (
                   <li key={item.id}>
                     <h3>{item.label}: {item.applicant}</h3>
-                    <p>Your review: <strong>{record?.correct ? 'Correct' : 'Needs correction'}</strong></p>
-                    <p>Required decision: {decisionName(item.correctDecision)}. Your decision: {record ? decisionName(record.decision) : 'Not recorded'}.</p>
+                    <p>Your diagnosis: <strong>{record?.correct ? 'Correct' : 'Needs correction'}</strong></p>
+                    <p>Required decision: {decisionName(item.correctDecision)}. Your diagnosis: {record ? decisionName(record.decision) : 'Not recorded'}.</p>
                     <p>Required reason: {reasonName(item.correctReason)} Your reason: {record ? reasonName(record.reason) : 'Not recorded'}</p>
+                    <p>Final disposition: <strong>{record ? decisionName(record.disposition) : 'Not finalized'}</strong>{record?.exception ? ' - dispensation granted, accepted despite defect.' : ' - followed required procedure.'}</p>
                   </li>
                 )
               })}

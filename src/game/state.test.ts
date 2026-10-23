@@ -365,6 +365,55 @@ describe('reducer', () => {
     expect(reducer(clear, { type: 'APPEAL_VERDICT' })).toBe(clear)
   })
 
+  it('strike appeal costs 50 only at exactly two strikes and records its purpose', () => {
+    for (const suspicion of [0, 10, 25]) {
+      const before = { ...playing, round: 4, score: 80, strikes: 2, suspicion, attempt: 1, history: [{ round: 1, passed: true, count: 3 }] }
+      const after = reducer(before, { type: 'APPEAL_VERDICT', relief: 'strike' })
+      expect(after).toMatchObject({ score: 30, strikes: 1, suspicion, appealUsed: true, round: 4, attempt: 1 })
+      expect(after.history).toBe(before.history)
+      expect(after.lastVerdict?.outcome).toBe('Appeal accepted: strike relief')
+      expect(after.lastVerdict?.delta).toEqual({ score: -50, strikes: -1, suspicion: 0 })
+      expect(reducer(after, { type: 'APPEAL_VERDICT', relief: 'suspicion' })).toBe(after)
+    }
+    for (const strikes of [0, 1, 3]) {
+      const before = { ...playing, score: 100, strikes, suspicion: 20 }
+      expect(reducer(before, { type: 'APPEAL_VERDICT', relief: 'strike' })).toBe(before)
+    }
+    expect(reducer({ ...playing, score: 49, strikes: 2 }, { type: 'APPEAL_VERDICT', relief: 'strike' }).appealUsed).toBe(false)
+  })
+
+  it('both Appeal purposes share one use; missing and undefined relief preserve legacy suspicion relief', () => {
+    const eligible = { ...playing, score: 100, strikes: 2, suspicion: 25 }
+    const suspicionFirst = reducer(eligible, { type: 'APPEAL_VERDICT', relief: 'suspicion' })
+    expect(suspicionFirst).toMatchObject({ score: 50, strikes: 2, suspicion: 5, appealUsed: true })
+    expect(suspicionFirst.lastVerdict?.outcome).toBe('Appeal accepted: suspicion relief')
+    expect(reducer(suspicionFirst, { type: 'APPEAL_VERDICT', relief: 'strike' })).toBe(suspicionFirst)
+
+    const strikeFirst = reducer(eligible, { type: 'APPEAL_VERDICT', relief: 'strike' })
+    expect(reducer(strikeFirst, { type: 'APPEAL_VERDICT', relief: 'suspicion' })).toBe(strikeFirst)
+    const legacy = reducer({ ...playing, score: 50, suspicion: 12 }, { type: 'APPEAL_VERDICT' })
+    const undefinedLegacy = reducer({ ...playing, score: 50, suspicion: 12 }, { type: 'APPEAL_VERDICT', relief: undefined })
+    expect(legacy).toMatchObject({ score: 0, suspicion: 0, appealUsed: true })
+    expect(undefinedLegacy).toEqual(legacy)
+  })
+
+  it('unknown explicit Appeal relief and phase/resource guards are exact no-ops', () => {
+    const eligible = { ...playing, score: 100, strikes: 2, suspicion: 20 }
+    for (const relief of [null, '', 'unknown']) {
+      expect(reducer(eligible, { type: 'APPEAL_VERDICT', relief } as unknown as Action)).toBe(eligible)
+    }
+    for (const before of [
+      { ...eligible, appealUsed: true },
+      { ...eligible, score: 49 },
+      { ...eligible, suspicion: 0 },
+      { ...eligible, phase: 'ending' as const },
+    ]) {
+      expect(reducer(before, { type: 'APPEAL_VERDICT', relief: 'suspicion' })).toBe(before)
+    }
+    const reset = reducer({ ...eligible, appealUsed: true }, { type: 'RESTART' })
+    expect(reset.appealUsed).toBe(false)
+  })
+
   it('appeal is ignored outside play and on repeat use', () => {
     const ended = reducer(playing, { type: 'END_RUN', ending: 'ghost' })
     const used = { ...playing, score: 100, suspicion: 50, appealUsed: true } as GameState
@@ -389,5 +438,110 @@ describe('reducer', () => {
       result: { passed: true, timeLeftSec: 10 },
     })
     expect(s).toBe(initialState)
+  })
+
+  it('rejects every malformed round 9 evidence payload as one ordinary wrong submission', () => {
+    const at9 = { ...playing, round: 9 }
+    const payloads = [
+      { result: { passed: true, timeLeftSec: 10 } },
+      { evidenceIds: undefined },
+      { evidenceIds: null },
+      { evidenceIds: [] },
+      { evidenceIds: 'existence-declaration' },
+      { evidenceIds: ['existence-declaration', 'unknown'] },
+      { evidenceIds: ['existence-declaration', 'fern-reference', 'fern-reference'] },
+      { evidenceIds: ['existence-declaration', 7] },
+      { evidenceIds: ['fern-reference'] },
+    ]
+    for (const payload of payloads) {
+      const result = { passed: true, timeLeftSec: 10, ...('result' in payload ? payload.result : {}), ...('evidenceIds' in payload ? { evidenceIds: payload.evidenceIds } : {}) }
+      const after = reducer(at9, { type: 'SUBMIT_ROUND', identity: { round: 9, attempt: 0 }, result } as unknown as Action)
+      expect(after).toMatchObject({ round: 10, score: 0, strikes: 1, suspicion: 0 })
+      expect(after.history).toEqual([{ round: 9, passed: false, count: undefined }])
+      expect(after.lastVerdict?.delta).toEqual({ score: 0, strikes: 1, suspicion: 0 })
+    }
+  })
+
+  it('round 9 evidence requires exact identity before payload validation', () => {
+    const at9 = { ...playing, round: 9 }
+    const invalid = { type: 'SUBMIT_ROUND', result: { passed: true, timeLeftSec: 10, evidenceIds: ['bogus'] } } as unknown as Action
+    expect(reducer(at9, invalid)).toBe(at9)
+    for (const identity of [undefined, null, { round: 8, attempt: 0 }, { round: 9, attempt: 1 }, { round: '9', attempt: 0 }, { round: 9, attempt: 0.5 }]) {
+      const action = { ...invalid, identity } as unknown as Action
+      expect(reducer(at9, action)).toBe(at9)
+    }
+  })
+
+  it('derives evidence validity, excludes sibling fields, and rejects injected evidence elsewhere', () => {
+    const at9 = { ...playing, round: 9, ambiguousChoice: 'poster' as const }
+    const identity = { round: 9, attempt: 0 }
+    const invalid = reducer(at9, {
+      type: 'SUBMIT_ROUND', identity,
+      result: { passed: true, timeLeftSec: 10, count: 9, ambiguousChoice: 'bicycle', evidenceIds: ['fern-reference'] },
+    } as unknown as Action)
+    expect(invalid).toMatchObject({ round: 10, score: 0, strikes: 1, suspicion: 0, ambiguousChoice: 'poster' })
+    expect(invalid.history).toEqual([{ round: 9, passed: false, count: undefined }])
+    expect(invalid.lastVerdict?.delta).toEqual({ score: 0, strikes: 1, suspicion: 0 })
+
+    const passed = reducer(at9, {
+      type: 'SUBMIT_ROUND', identity,
+      result: { passed: false, timeLeftSec: 10, count: 99, ambiguousChoice: 'bicycle', evidenceIds: ['existence-declaration'] },
+    } as unknown as Action)
+    expect(passed).toMatchObject({ round: 10, score: 160, strikes: 0, suspicion: 0, ambiguousChoice: 'poster' })
+    expect(passed.history).toEqual([{ round: 9, passed: true, count: undefined }])
+    expect(reducer(passed, {
+      type: 'SUBMIT_ROUND', identity,
+      result: { passed: false, timeLeftSec: 10, evidenceIds: ['existence-declaration'] },
+    } as unknown as Action)).toBe(passed)
+
+    for (const round of [8, 10]) {
+      const sibling = { ...playing, round }
+      const injected = { type: 'SUBMIT_ROUND', result: { passed: true, timeLeftSec: 10, evidenceIds: ['existence-declaration'] } } as unknown as Action
+      expect(reducer(sibling, injected)).toBe(sibling)
+      expect(reducer(sibling, {
+        type: 'SUBMIT_ROUND', identity: { round, attempt: 0 },
+        result: { passed: true, timeLeftSec: 10, evidenceIds: undefined },
+      } as unknown as Action)).toBe(sibling)
+    }
+  })
+
+  it('round 9 evidence applies timing before attachment effects and resolves only after bonuses', () => {
+    const at8 = { ...playing, round: 8 }
+    const at9 = { ...playing, round: 9 }
+    for (const timeLeftSec of [3, 4, 9, 10]) {
+      const baseline = reducer(at8, { type: 'SUBMIT_ROUND', result: { passed: true, timeLeftSec } })
+      const evidence = reducer(at9, {
+        type: 'SUBMIT_ROUND', identity: { round: 9, attempt: 0 },
+        result: { passed: true, timeLeftSec, evidenceIds: ['existence-declaration'] },
+      } as unknown as Action)
+      expect(evidence.score - at9.score).toBe(baseline.score - at8.score)
+      expect(evidence.suspicion).toBe(baseline.suspicion)
+    }
+
+    const extras = reducer({ ...at9, suspicion: 40 }, {
+      type: 'SUBMIT_ROUND', identity: { round: 9, attempt: 0 },
+      result: { passed: true, timeLeftSec: 10, evidenceIds: ['existence-declaration', 'fern-reference', 'queue-receipt'] },
+    } as unknown as Action)
+    expect(extras).toMatchObject({ phase: 'play', round: 10, score: 240, suspicion: 65 })
+    expect(extras.lastVerdict?.delta).toEqual({ score: 240, strikes: 0, suspicion: 25 })
+
+    const terminal = reducer({ ...at9, suspicion: 99 }, {
+      type: 'SUBMIT_ROUND', identity: { round: 9, attempt: 0 },
+      result: { passed: true, timeLeftSec: 1, evidenceIds: ['existence-declaration', 'fern-reference', 'queue-receipt'] },
+    } as unknown as Action)
+    expect(terminal).toMatchObject({ phase: 'ending', ending: 'flagged', score: 231, suspicion: 100 })
+    expect(terminal.lastVerdict?.delta).toEqual({ score: 231, strikes: 0, suspicion: 1 })
+    expect(terminal.lastVerdict?.outcome).toContain('run flagged')
+  })
+
+  it('round 9 evidence expiry cannot award attachments or accept the stale filing', () => {
+    const at9 = { ...playing, round: 9 }
+    const expired = reducer(at9, { type: 'TIMER_EXPIRED' })
+    const stale = reducer(expired, {
+      type: 'SUBMIT_ROUND', identity: { round: 9, attempt: 0 },
+      result: { passed: true, timeLeftSec: 20, evidenceIds: ['existence-declaration', 'fern-reference', 'queue-receipt'] },
+    } as unknown as Action)
+    expect(expired).toMatchObject({ round: 10, score: 0, strikes: 1, history: [{ round: 9, passed: false }] })
+    expect(stale).toBe(expired)
   })
 })

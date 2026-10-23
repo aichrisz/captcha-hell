@@ -78,18 +78,6 @@ const round8: RecallData = {
   fallbackCount: 3,
 }
 
-const round9: GridData = {
-  prompt: 'Select all squares that do NOT contain proof you exist.',
-  cells: [
-    { icon: '\u{25AB}\u{FE0F}' }, { icon: '\u{1F32B}\u{FE0F}' }, { icon: '\u{1F4AD}' },
-    { icon: '\u{25FB}\u{FE0F}' }, { icon: '\u{1F4C4}' }, { icon: '\u{3030}\u{FE0F}' },
-    { icon: '\u{1F573}\u{FE0F}' }, { icon: '\u{25AA}\u{FE0F}' }, { icon: '\u{1F4A8}' },
-  ],
-  correct: [0, 1, 2, 3, 4, 5, 6, 7, 8],
-  failCopy: 'Almost. Nothing here proves anything. Look closer.',
-  freeRetries: 1,
-}
-
 const round10: FinalData = {
   prompt: 'Final verification: prove you are human.',
   checkbox: {
@@ -113,7 +101,7 @@ export const ROUNDS: RoundDef[] = [
   { id: 6, stage: 2, type: 'stamps', timerSec: 0, allowRetry: true, data: round6 },
   { id: 7, stage: 3, type: 'wordChoice', timerSec: 20, allowRetry: false, data: round7 },
   { id: 8, stage: 3, type: 'recall', timerSec: 20, allowRetry: false, data: round8 },
-  { id: 9, stage: 3, type: 'grid', timerSec: 20, allowRetry: false, data: round9 },
+  { id: 9, stage: 3, type: 'evidence', timerSec: 20, allowRetry: false, data: null },
   { id: 10, stage: 4, type: 'final', timerSec: 0, allowRetry: false, data: round10 },
 ]
 

@@ -5,6 +5,7 @@ import { applyStrike } from './strikes'
 import { applySuspicion } from './suspicion'
 import { ENDING_COPY, selectEnding } from './endings'
 import { recordAnswer } from './history'
+import { evaluateEvidence } from './puzzles/evidence'
 
 export const initialState: GameState = {
   phase: 'start',
@@ -23,7 +24,8 @@ function measures(state: GameState): VerdictMeasures {
   return { score: state.score, strikes: state.strikes, suspicion: state.suspicion }
 }
 
-function verdictOutcome(before: GameState, after: GameState, action: VerdictAction, passed?: boolean): string {
+function verdictOutcome(before: GameState, after: GameState, action: VerdictAction, passed?: boolean, detail?: string): string {
+  if (detail) return detail
   if (action === 'APPEAL_VERDICT') return 'Appeal accepted'
   if (action === 'FINAL_CHOICE') return after.ending ? `Final classification: ${ENDING_COPY[after.ending].title}` : 'Final choice recorded'
   if (action === 'REFUSE_VERIFICATION') return 'Verification refused; account flagged'
@@ -38,14 +40,14 @@ function verdictOutcome(before: GameState, after: GameState, action: VerdictActi
   return action === 'TIMER_EXPIRED' ? 'Time expired; retry available' : 'Rejected; retry available'
 }
 
-function recordVerdict(before: GameState, after: GameState, action: VerdictAction, passed?: boolean): GameState {
+function recordVerdict(before: GameState, after: GameState, action: VerdictAction, passed?: boolean, detail?: string): GameState {
   const beforeValues = measures(before)
   const afterValues = measures(after)
   const lastVerdict: LastVerdict = {
     sequence: (before.lastVerdict?.sequence ?? 0) + 1,
     action,
     round: before.round,
-    outcome: verdictOutcome(before, after, action, passed),
+    outcome: verdictOutcome(before, after, action, passed, detail),
     before: beforeValues,
     after: afterValues,
     delta: {
@@ -72,11 +74,11 @@ function advance(state: GameState): GameState {
   return { ...state, round: Math.min(10, state.round + 1), attempt: 0 }
 }
 
-function passRound(state: GameState, result: RoundResult): GameState {
+function passRound(state: GameState, result: RoundResult, evidenceAttachments = 0): GameState {
   const def = getRound(state.round)
   const retried = state.attempt > 0
   const timeLeftSec = def.timerSec === 0 ? 0 : result.timeLeftSec
-  const score = state.score + scorePass(timeLeftSec, retried)
+  const score = state.score + scorePass(timeLeftSec, retried) + evidenceAttachments * 40
 
   let suspicion = state.suspicion
   if (def.timerSec > 0) {
@@ -84,6 +86,7 @@ function passRound(state: GameState, result: RoundResult): GameState {
     if (frac < 0.2) suspicion = applySuspicion(suspicion, 'slowAnswer')
     else if (!retried && frac >= 0.5) suspicion = applySuspicion(suspicion, 'cleanFastPass')
   }
+  suspicion = Math.min(100, suspicion + evidenceAttachments * 15)
 
   const history = recordAnswer(state.history, {
     round: def.id,
@@ -129,6 +132,26 @@ export function reducer(state: GameState, action: Action): GameState {
 
     case 'SUBMIT_ROUND': {
       if (state.phase !== 'play') return state
+      const resultObject = action.result && typeof action.result === 'object' ? action.result : undefined
+      const hasEvidencePayload = Boolean(resultObject && Object.prototype.hasOwnProperty.call(resultObject, 'evidenceIds'))
+      if (state.round !== 9 && hasEvidencePayload) return state
+      if (state.round === 9) {
+        const identity = action.identity
+        if (!identity || !Number.isInteger(identity.round) || !Number.isInteger(identity.attempt) || identity.round !== 9 || identity.attempt !== state.attempt) return state
+        const evaluated = evaluateEvidence(resultObject && Object.prototype.hasOwnProperty.call(resultObject, 'evidenceIds') ? resultObject.evidenceIds : undefined)
+        const normalized: RoundResult = {
+          passed: evaluated.valid,
+          timeLeftSec: typeof resultObject?.timeLeftSec === 'number' ? resultObject.timeLeftSec : 0,
+          ...(evaluated.valid ? {} : { strikeSource: 'wrongSubmit' as const }),
+        }
+        const next = evaluated.valid
+          ? passRound(state, normalized, evaluated.attachmentCount)
+          : failRound(state, normalized)
+        const detail = evaluated.valid
+          ? `Evidence filed with ${evaluated.attachmentCount} optional attachment${evaluated.attachmentCount === 1 ? '' : 's'}${next.phase === 'ending' && next.ending === 'flagged' ? '; run flagged' : ''}`
+          : undefined
+        return recordVerdict(state, next, action.type, evaluated.valid, detail)
+      }
       if (action.identity && (action.identity.round !== state.round || action.identity.attempt !== state.attempt)) return state
       const next = action.result.passed
         ? passRound(state, action.result)
@@ -151,9 +174,15 @@ export function reducer(state: GameState, action: Action): GameState {
     }
 
     case 'APPEAL_VERDICT': {
-      if (state.phase !== 'play' || state.appealUsed || state.score < 50 || state.suspicion <= 0) return state
-      const next = { ...state, score: state.score - 50, suspicion: Math.max(0, state.suspicion - 20), appealUsed: true }
-      return recordVerdict(state, next, action.type)
+      const relief = action.relief === undefined ? 'suspicion' : action.relief
+      if (relief !== 'suspicion' && relief !== 'strike') return state
+      if (state.phase !== 'play' || state.appealUsed || state.score < 50) return state
+      if (relief === 'suspicion' && state.suspicion <= 0) return state
+      if (relief === 'strike' && state.strikes !== 2) return state
+      const next = relief === 'suspicion'
+        ? { ...state, score: state.score - 50, suspicion: Math.max(0, state.suspicion - 20), appealUsed: true }
+        : { ...state, score: state.score - 50, strikes: state.strikes - 1, appealUsed: true }
+      return recordVerdict(state, next, action.type, undefined, `Appeal accepted: ${relief} relief`)
     }
 
     case 'TIMER_EXPIRED': {
